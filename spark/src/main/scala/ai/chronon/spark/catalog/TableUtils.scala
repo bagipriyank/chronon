@@ -261,7 +261,8 @@ class TableUtils(@transient val sparkSession: SparkSession) extends Serializable
                        tableProperties: Map[String, String] = null,
                        partitionColumns: List[String] = List(partitionColumn),
                        autoExpand: Boolean = false,
-                       semanticHash: Option[String] = None): Unit = {
+                       semanticHash: Option[String] = None,
+                       outputLocation: Option[String] = None): Unit = {
 
     // partitions to the last
     val colOrder = df.columns.diff(partitionColumns) ++ partitionColumns
@@ -274,7 +275,8 @@ class TableUtils(@transient val sparkSession: SparkSession) extends Serializable
                                                     dfRearranged.schema,
                                                     partitionColumns,
                                                     tableProperties,
-                                                    semanticHash)(sparkSession)
+                                                    semanticHash,
+                                                    outputLocation)(sparkSession)
       } catch {
         case _: TableAlreadyExistsException =>
           logger.info(s"Table $tableName already exists, skipping creation")

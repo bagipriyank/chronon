@@ -20,19 +20,25 @@ object CreationUtils {
                      schema: StructType,
                      partitionColumns: List[String],
                      tableProperties: Map[String, String],
-                     tableTypeString: String): String = {
+                     tableTypeString: String,
+                     outputLocation: Option[String] = None): String = {
 
     require(
       tableTypeString.isEmpty || ALLOWED_TABLE_TYPES.contains(tableTypeString.toLowerCase),
       s"Invalid table type: ${tableTypeString}. Must be empty OR one of: ${ALLOWED_TABLE_TYPES}"
     )
 
+    val tableType = outputLocation match {
+      case Some(s) if s.nonEmpty => "EXTERNAL"
+      case _                     => ""
+    }
+
     val noPartitions = StructType(
       schema
         .filterNot(field => partitionColumns.contains(field.name)))
 
     val createFragment =
-      s"""CREATE TABLE IF NOT EXISTS $tableName (
+      s"""CREATE $tableType TABLE IF NOT EXISTS $tableName (
          |    ${noPartitions.toDDL}
          |)
          |${if (tableTypeString.isEmpty) "" else f"USING ${tableTypeString}"}
@@ -52,6 +58,15 @@ object CreationUtils {
       ""
     }
 
+    // write in the cloud path location if provided
+    val cloudPathLocation = if (outputLocation.isDefined) {
+      val cloudPath = if (outputLocation.get.endsWith("/")) outputLocation.get else outputLocation.get + "/"
+      val finalTableName = if (tableName.contains(".")) tableName.split("\\.").last else tableName
+      s"LOCATION '${cloudPath + finalTableName}/'"
+    } else {
+      ""
+    }
+
     val propertiesFragment = if (tableProperties != null && tableProperties.nonEmpty) {
       s"""TBLPROPERTIES (
          |    ${(tableProperties + ("file_format" -> "PARQUET") + ("table_type" -> tableTypeString))
@@ -63,7 +78,7 @@ object CreationUtils {
       ""
     }
 
-    Seq(createFragment, partitionFragment, propertiesFragment).mkString("\n")
+    Seq(createFragment, partitionFragment, cloudPathLocation, propertiesFragment).mkString("\n")
 
   }
 

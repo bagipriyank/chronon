@@ -762,8 +762,8 @@ object GroupBy {
           val latestValid: String = Option(source.query.endPartition).getOrElse(latestAvailable.orNull)
           SourceDataProfile(latestValid, latestValid, latestValid)
         } else {
-          val minQuery = sourcePartitionSpec.before(queryStart)
-          val windowStart: String = window.map(sourcePartitionSpec.minus(minQuery, _)).orNull
+          val minQuery = tableUtils.partitionSpec.before(queryStart)
+          val windowStart: String = window.map(tableUtils.partitionSpec.minus(minQuery, _)).orNull
           lazy val sourceStart = Option(source.query.startPartition).orNull
           SourceDataProfile(windowStart, sourceStart, effectiveEnd)
         }
@@ -872,16 +872,23 @@ object GroupBy {
                       endPartition: String,
                       tableUtils: TableUtils,
                       stepDays: Option[Int] = None,
-                      skipFirstHole: Boolean = true): Unit = {
+                      skipFirstHole: Boolean = true,
+                      outputLocation: Option[String] = None): Unit = {
     Option(groupByConf.setups).foreach(_.foreach(tableUtils.sql))
     val outputTable = groupByConf.metaData.outputTable
     val tableProps = Option(groupByConf.metaData.tableProperties)
       .map(_.toScala)
       .orNull
-    // CLI dates are always in yyyy-MM-dd format; translate to the configured partition spec
-    val groupByUnfilledRangesOpt = Option(
-      Seq(PartitionRange(startPartition, endPartition)(PartitionSpec.daily).translate(tableUtils.partitionSpec))
-    ) // TODO(tchow): possilbly revert if orchestrator is not yet available.
+    val groupByUnfilledRangesOpt = tableUtils.unfilledRanges(
+      outputTable,
+      PartitionRange(startPartition, endPartition)(tableUtils.partitionSpec),
+      Some(groupByConf.sources.toScala.map(_.table)),
+      skipFirstHole = skipFirstHole
+    )
+
+    // val groupByUnfilledRangesOpt = Option(
+    //  Seq(PartitionRange(startPartition, endPartition)(tableUtils.partitionSpec))
+    // ) // TODO(tchow): possilbly revert if orchestrator is not yet available.
 
     if (groupByUnfilledRangesOpt.isEmpty) {
       logger.info(s"""Nothing to backfill for $outputTable - given
@@ -910,11 +917,11 @@ object GroupBy {
               case EVENTS   => groupByBackfill.snapshotEvents(range)
             }
             if (!groupByConf.hasDerivations) {
-              outputDf.save(outputTable, tableProps)
+              outputDf.save(outputTable, tableProps, outputLocation = outputLocation)
             } else {
               val finalOutputColumns = groupByConf.derivationsScala.finalOutputColumn(outputDf.columns)
               val result = outputDf.select(finalOutputColumns.toSeq: _*)
-              result.save(outputTable, tableProps)
+              result.save(outputTable, tableProps, outputLocation = outputLocation)
             }
             logger.info(s"Wrote to table $outputTable, into partitions: $range")
           }

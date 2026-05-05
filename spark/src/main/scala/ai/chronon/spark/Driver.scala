@@ -88,6 +88,9 @@ object Driver {
     this: ScallopConf =>
     val confPath: ScallopOption[String] = opt[String](required = false, descr = "Path to conf")
 
+    val outputLocation: ScallopOption[String] =
+      opt[String](name = "output-location", required = false, descr = "Cloud path to output data", default = None)
+
     val runFirstHole: ScallopOption[Boolean] =
       opt[Boolean](required = false,
                    default = Some(true),
@@ -405,7 +408,8 @@ object Driver {
         args.endDate(),
         tableUtils,
         args.effectiveStepDays(args.groupByConf.metaData),
-        !args.runFirstHole()
+        !args.runFirstHole(),
+        args.outputLocation.toOption
       )
 
       if (args.shouldExport()) {

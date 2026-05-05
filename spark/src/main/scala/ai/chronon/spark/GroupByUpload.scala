@@ -445,6 +445,7 @@ object GroupByUpload {
   def run(groupByConf: api.GroupBy,
           endDs: String,
           tableUtilsOpt: Option[TableUtils] = None,
+          outputLocation: Option[String] = None,
           showDf: Boolean = false,
           jsonPercent: Int = 1): Unit = {
     import ai.chronon.spark.submission.SparkSessionBuilder
@@ -505,7 +506,8 @@ object GroupByUpload {
     } else {
       uploadDf.save(groupByConf.metaData.uploadTable,
                     groupByConf.metaData.tableProps,
-                    partitionColumns = List(partitionCol))
+                    partitionColumns = List(partitionCol),
+                    outputLocation = outputLocation)
 
       val kvDfReloaded = tableUtils
         .loadTable(groupByConf.metaData.uploadTable)

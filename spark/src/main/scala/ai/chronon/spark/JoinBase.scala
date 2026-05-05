@@ -128,7 +128,8 @@ abstract class JoinBase(val joinConfCloned: api.Join,
                    leftRange: PartitionRange,
                    bootstrapInfo: BootstrapInfo,
                    runSmallMode: Boolean = false,
-                   usingBootstrappedLeft: Boolean = false): Option[DataFrame]
+                   usingBootstrappedLeft: Boolean = false,
+                   outputLocation: Option[String] = None): Option[DataFrame]
 
   private def getUnfilledRange(overrideStartPartition: Option[String],
                                outputTable: String): (PartitionRange, Seq[PartitionRange]) = {
@@ -227,7 +228,9 @@ abstract class JoinBase(val joinConfCloned: api.Join,
 
   }
 
-  def forceComputeRangeAndSave(range: PartitionRange, semanticHash: Option[String] = None): Option[DataFrame] =
+  def forceComputeRangeAndSave(range: PartitionRange,
+                               semanticHash: Option[String] = None,
+                               outputLocation: Option[String] = None): Option[DataFrame] =
     tableUtils.withJobDescription(s"MonolithJoin(${joinMetaData.name}) $range") {
 
       Option(joinConfCloned.setups).foreach(_.foreach(tableUtils.sql))
@@ -237,7 +240,7 @@ abstract class JoinBase(val joinConfCloned: api.Join,
 
       val bootstrapInfo = BootstrapInfo.from(joinConfCloned.deepCopy(), range, tableUtils, leftDfInRange.map(_.schema))
 
-      val dfOpt = computeRange(leftDfInRange.get, range, bootstrapInfo)
+      val dfOpt = computeRange(leftDfInRange.get, range, bootstrapInfo, outputLocation = outputLocation)
       dfOpt.map { df =>
         val table = joinMetaData.outputTable
 
@@ -248,13 +251,16 @@ abstract class JoinBase(val joinConfCloned: api.Join,
       }
     }
 
-  def computeJoin(stepDays: Option[Int] = None, overrideStartPartition: Option[String] = None): DataFrame = {
-    computeJoinOpt(stepDays, overrideStartPartition).get
+  def computeJoin(stepDays: Option[Int] = None,
+                  overrideStartPartition: Option[String] = None,
+                  outputLocation: Option[String] = None): DataFrame = {
+    computeJoinOpt(stepDays, overrideStartPartition, outputLocation = outputLocation).get
   }
 
   def computeJoinOpt(stepDays: Option[Int] = None,
                      overrideStartPartition: Option[String] = None,
-                     useBootstrapForLeft: Boolean = false): Option[DataFrame] = {
+                     useBootstrapForLeft: Boolean = false,
+                     outputLocation: Option[String] = None): Option[DataFrame] = {
 
     assert(Option(joinConfCloned.metaData.team).nonEmpty,
            s"join.metaData.team needs to be set for join ${joinConfCloned.metaData.name}")
@@ -376,7 +382,7 @@ abstract class JoinBase(val joinConfCloned: api.Join,
         if (showDf) leftDfInRange.prettyPrint()
         // set autoExpand = true to ensure backward compatibility due to column ordering changes
 
-        val finalDf = computeRange(leftDfInRange, range, bootstrapInfo, runSmallMode, useBootstrapForLeft)
+        val finalDf = computeRange(leftDfInRange, range, bootstrapInfo, runSmallMode, useBootstrapForLeft, outputLocation)
 
         if (selectedJoinParts.isDefined) {
           assert(finalDf.isEmpty,
@@ -384,7 +390,7 @@ abstract class JoinBase(val joinConfCloned: api.Join,
           logger.info(s"Skipping writing to the output table for range: ${range.toString()}  $progress")
         } else {
 
-          finalDf.get.save(outputTable, tableProps, autoExpand = true)
+          finalDf.get.save(outputTable, tableProps, autoExpand = true, outputLocation = outputLocation)
           val elapsedMins = (System.currentTimeMillis() - startMillis) / (60 * 1000)
           metrics.gauge(Metrics.Name.LatencyMinutes, elapsedMins)
           metrics.gauge(Metrics.Name.PartitionCount, range.partitions.length)

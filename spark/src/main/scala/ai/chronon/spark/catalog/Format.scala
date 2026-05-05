@@ -23,7 +23,8 @@ trait Format {
                   schema: StructType,
                   partitionColumns: List[String],
                   providedProperties: Map[String, String],
-                  semanticHash: Option[String] = None)(implicit sparkSession: SparkSession): Unit = {
+                  semanticHash: Option[String] = None,
+                  outputLocation: Option[String] = None)(implicit sparkSession: SparkSession): Unit = {
     val (creationName, quotedOriginal) = semanticHash match {
       case Some(hash) =>
         val parts = Format.parseIdentifier(tableName).toList
@@ -33,7 +34,7 @@ trait Format {
     }
     sparkSession.sql(
       CreationUtils
-        .createTableSql(creationName, schema, partitionColumns, providedProperties, tableTypeString))
+        .createTableSql(creationName, schema, partitionColumns, providedProperties, tableTypeString, outputLocation))
     if (semanticHash.isDefined) {
       try {
         sparkSession.sql(Format.renameTableSql(creationName, tableName))
