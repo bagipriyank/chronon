@@ -762,8 +762,8 @@ object GroupBy {
           val latestValid: String = Option(source.query.endPartition).getOrElse(latestAvailable.orNull)
           SourceDataProfile(latestValid, latestValid, latestValid)
         } else {
-          val minQuery = tableUtils.partitionSpec.before(queryStart)
-          val windowStart: String = window.map(tableUtils.partitionSpec.minus(minQuery, _)).orNull
+          val minQuery = sourcePartitionSpec.before(queryStart)
+          val windowStart: String = window.map(sourcePartitionSpec.minus(minQuery, _)).orNull
           lazy val sourceStart = Option(source.query.startPartition).orNull
           SourceDataProfile(windowStart, sourceStart, effectiveEnd)
         }
@@ -879,10 +879,17 @@ object GroupBy {
     val tableProps = Option(groupByConf.metaData.tableProperties)
       .map(_.toScala)
       .orNull
+    val sourceTables = groupByConf.sources.toScala.flatMap { source =>
+      val mutationTable = if (source.isSetEntities && source.getEntities.isSetMutationTable)
+        Seq(source.getEntities.mutationTable.cleanSpec)
+      else
+        Seq.empty
+      Seq(source.table) ++ mutationTable
+    }.distinct
     val groupByUnfilledRangesOpt = tableUtils.unfilledRanges(
       outputTable,
       PartitionRange(startPartition, endPartition)(tableUtils.partitionSpec),
-      Some(groupByConf.sources.toScala.map(_.table)),
+      Some(sourceTables),
       skipFirstHole = skipFirstHole
     )
 

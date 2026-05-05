@@ -2,6 +2,7 @@ import json
 import logging
 import multiprocessing
 import os
+import shlex
 
 from ai.chronon.repo import utils
 from ai.chronon.repo.constants import (
@@ -247,7 +248,7 @@ class Runner:
             submitter_args.append(f"--uploader={self.uploader}")
 
         if self.output_location:
-            submitter_args.append(f"--output-location={self.output_location}")
+            submitter_args.append(f"--output-location={shlex.quote(self.output_location)}")
 
         if self.additional_jars:
             submitter_args.append(f"--additional-jars={self.additional_jars}")
