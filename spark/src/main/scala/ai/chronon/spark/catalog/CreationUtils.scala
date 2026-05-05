@@ -61,8 +61,10 @@ object CreationUtils {
     // write in the cloud path location if provided
     val cloudPathLocation = if (outputLocation.isDefined) {
       val cloudPath = if (outputLocation.get.endsWith("/")) outputLocation.get else outputLocation.get + "/"
-      val finalTableName = if (tableName.contains(".")) tableName.split("\\.").last else tableName
-      s"LOCATION '${cloudPath + finalTableName}/'"
+      // Strip backticks from the last identifier segment to handle quoted names safely
+      val lastSegment = if (tableName.contains(".")) tableName.split("\\.").last else tableName
+      val finalTableName = lastSegment.stripPrefix("`").stripSuffix("`")
+      s"LOCATION '${escapeSqlStringValue(cloudPath + finalTableName)}/'"
     } else {
       ""
     }

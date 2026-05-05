@@ -491,6 +491,7 @@ object GroupByUpload {
     logger.info(s"GroupBy upload with upload format: $uploadFormat")
 
     if (uploadFormat == "ion") {
+      // Ion writes use IonPathConfig.UploadLocationKey for output path; outputLocation is not supported for this format
       val rootPath = sparkConf.getOption(IonPathConfig.UploadLocationKey)
       val ionDf = uploadDf.withColumn(partitionCol, to_date(col(partitionCol)))
       val result = IonWriter.write(

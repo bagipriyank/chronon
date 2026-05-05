@@ -312,7 +312,8 @@ object Driver {
         val result =
           join.computeJoinOpt(args.effectiveStepDays(args.joinConf.metaData),
                               args.startPartition.toOption,
-                              args.useCachedLeft.getOrElse(false))
+                              args.useCachedLeft.getOrElse(false),
+                              outputLocation = args.outputLocation.toOption)
         if (result.isDefined) {
           logger.info(
             s"Backfilling selected join parts: ${args.selectedJoinParts()} is complete. Skipping the final join. Exiting."
@@ -323,7 +324,7 @@ object Driver {
 
       val finalStepDays = args.effectiveStepDays(args.joinConf.metaData)
 
-      val df = join.computeJoin(finalStepDays, args.startPartition.toOption)
+      val df = join.computeJoin(finalStepDays, args.startPartition.toOption, outputLocation = args.outputLocation.toOption)
 
       if (args.shouldExport()) {
         args.exportTableToLocal(args.joinConf.metaData.outputTable, tableUtils)

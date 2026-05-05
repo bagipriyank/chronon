@@ -886,10 +886,6 @@ object GroupBy {
       skipFirstHole = skipFirstHole
     )
 
-    // val groupByUnfilledRangesOpt = Option(
-    //  Seq(PartitionRange(startPartition, endPartition)(tableUtils.partitionSpec))
-    // ) // TODO(tchow): possilbly revert if orchestrator is not yet available.
-
     if (groupByUnfilledRangesOpt.isEmpty) {
       logger.info(s"""Nothing to backfill for $outputTable - given
            |endPartition of $endPartition

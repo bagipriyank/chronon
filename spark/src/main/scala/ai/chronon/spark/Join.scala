@@ -235,7 +235,7 @@ class Join(joinConf: api.Join,
                             bootstrapInfo: BootstrapInfo,
                             runSmallMode: Boolean = false,
                             usingBootstrappedLeft: Boolean = false,
-                            outputLocation: Option[String] = None): Option[DataFrame] = {
+                            _outputLocation: Option[String] = None): Option[DataFrame] = {
 
     val leftTaggedDf = leftDf.addTimebasedColIfExists()
 
