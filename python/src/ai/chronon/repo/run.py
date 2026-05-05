@@ -267,6 +267,10 @@ def validate_additional_jars(ctx, param, value):
     type=click.Choice(["spark", "bigquery"], case_sensitive=False),
     help="Bulk put uploader to use when load data to kv store, applied to upload-to-kv mode",
 )
+@click.option(
+    "--output-location",
+    help="Path of output data where training/uploads will be written by creating a table on top of it",
+)
 @click.pass_context
 def main(
     ctx,
@@ -309,6 +313,7 @@ def main(
     additional_jars,
     debug,
     uploader,
+    output_location,
 ):
     """Run a Zipline pipeline.
 
