@@ -125,6 +125,14 @@ class PrefixedDynamoDbAsyncClient(delegate: DynamoDbAsyncClient, tablePrefix: St
     delegate.updateTimeToLive(prefixedRequest)
   }
 
+  def updateTable(request: UpdateTableRequest): CompletableFuture[UpdateTableResponse] = {
+    val originalTableName = request.tableName()
+    val prefixedTableName = prefixTableName(originalTableName)
+    logger.debug(s"updateTable: original table name='$originalTableName' -> prefixed table name='$prefixedTableName'")
+    val prefixedRequest = request.toBuilder.tableName(prefixedTableName).build()
+    delegate.updateTable(prefixedRequest)
+  }
+
   def importTable(request: ImportTableRequest): CompletableFuture[ImportTableResponse] = {
     // For ImportTableRequest, the table name is in tableCreationParameters
     val originalParams = request.tableCreationParameters()

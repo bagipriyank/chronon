@@ -1,6 +1,6 @@
 package ai.chronon.integrations.aws
 
-import ai.chronon.api.Constants.{ContinuationKey, KvEnableTtlArg, KvTablePrefixArg, ListLimit}
+import ai.chronon.api.Constants.{ContinuationKey, KvEnableTtlArg, KvReplicaRegionsArg, KvTablePrefixArg, ListLimit}
 import ai.chronon.api.Extensions.StringOps
 import ai.chronon.api.ScalaJavaConversions._
 import ai.chronon.api.{Constants, PartitionSpec, TilingUtils}
@@ -32,6 +32,13 @@ class DynamoDBKVStoreImpl(rawDynamoDbClient: DynamoDbAsyncClient, conf: Map[Stri
   protected val enableTtl: Boolean = conf.getOrElse(KvEnableTtlArg, "true").toBoolean
 
   private val tablePrefix = conf.getOrElse(KvTablePrefixArg, "")
+
+  private val replicaRegions: List[String] =
+    conf
+      .get(KvReplicaRegionsArg)
+      .filter(_.nonEmpty)
+      .map(_.split(",").map(_.trim).filter(_.nonEmpty).toList)
+      .getOrElse(List.empty)
 
   // Wrap the client to automatically prefix all table names
   private val prefixedDynamoDbClient: PrefixedDynamoDbAsyncClient = {
@@ -127,6 +134,8 @@ class DynamoDBKVStoreImpl(rawDynamoDbClient: DynamoDbAsyncClient, conf: Map[Stri
         prefixedDynamoDbClient.updateTimeToLive(ttlRequest).join()
         logger.info(s"TTL enabled on table: $dataset with attribute 'ttl'")
       }
+
+      addReplicaRegions(dataset)
 
       metricsContext.increment("create.successes")
     } catch {
@@ -383,6 +392,8 @@ class DynamoDBKVStoreImpl(rawDynamoDbClient: DynamoDbAsyncClient, conf: Map[Stri
         logger.info(s"TTL enabled on imported table: $physicalTableName")
       }
 
+      addReplicaRegions(physicalTableName)
+
       // Register the physical table name in the batch table registry
       create(batchTableRegistry)
       val registryKey = logicalTableName.sanitize.toUpperCase + batchSuffix
@@ -612,6 +623,38 @@ class DynamoDBKVStoreImpl(rawDynamoDbClient: DynamoDbAsyncClient, conf: Map[Stri
           throw new Exception("DynamoDB response missing key / valueBytes")
         ListValue(keyBytes.get, valueBytes.get)
       }
+    }
+  }
+
+  // Global Tables v2: called after a table is active to add read replicas in additional regions.
+  // Failure is non-fatal — replicas are best-effort for read locality.
+  // Uses a per-request 30s timeout override because UpdateTable is a control-plane operation
+  // that is much slower than data-plane calls and would otherwise hit the shared 3s client timeout.
+  protected def addReplicaRegions(tableName: String): Unit = {
+    if (replicaRegions.isEmpty) return
+    try {
+      val replicaUpdates = replicaRegions.map { region =>
+        ReplicationGroupUpdate
+          .builder()
+          .create(CreateReplicationGroupMemberAction.builder().regionName(region).build())
+          .build()
+      }
+      val requestOverride = AwsRequestOverrideConfiguration
+        .builder()
+        .apiCallTimeout(Duration.ofSeconds(10))
+        .apiCallAttemptTimeout(Duration.ofSeconds(10))
+        .build()
+      val updateRequest = UpdateTableRequest
+        .builder()
+        .tableName(tableName)
+        .replicaUpdates(replicaUpdates.toList.toJava)
+        .overrideConfiguration(requestOverride)
+        .build()
+      prefixedDynamoDbClient.updateTable(updateRequest).join()
+      logger.info(s"Global Table replicas added for '$tableName' in regions: ${replicaRegions.mkString(", ")}")
+    } catch {
+      case e: Exception =>
+        logger.warn(s"Failed to add replica regions for table '$tableName' — replicas are best-effort", e)
     }
   }
 }

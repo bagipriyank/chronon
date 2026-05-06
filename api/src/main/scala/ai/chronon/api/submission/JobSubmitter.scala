@@ -132,9 +132,8 @@ object JobSubmitter {
 
   def getArgValue(args: Array[String], argKeyword: String): Option[String] = {
     args
-      .find(_.startsWith(argKeyword))
-      .map(_.split("="))
-      .map(_(1))
+      .find(_.startsWith(s"$argKeyword="))
+      .map(arg => arg.substring(argKeyword.length + 1))
   }
 
   def parseConf[T <: TBase[_, _]: Manifest: ClassTag](confPath: String): T =

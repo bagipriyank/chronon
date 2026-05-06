@@ -1,6 +1,6 @@
 package ai.chronon.integrations.aws
 
-import ai.chronon.api.Constants.{ContinuationKey, KvEnableTtlArg, KvTablePrefixArg, ListLimit}
+import ai.chronon.api.Constants.{ContinuationKey, KvEnableTtlArg, KvReplicaRegionsArg, KvTablePrefixArg, ListLimit}
 import ai.chronon.api.ScalaJavaConversions._
 import java.time.LocalDate
 import ai.chronon.api.TilingUtils
@@ -817,6 +817,53 @@ class DynamoDBKVStoreTest extends AnyFlatSpec with Matchers with BeforeAndAfterA
       case Failure(ex) =>
         fail(s"$errorMsg: $ex")
     }
+  }
+
+  // Global Tables replication tests.
+  // DynamoDB Local does not support UpdateTable for replica operations, so we use SpyingDynamoDBKVStore
+  // (see DynamoDBKVStoreTestUtils.scala) to intercept addReplicaRegions calls and assert on their
+  // arguments without hitting the unsupported API.
+
+  it should "call addReplicaRegions with correct table name and regions on create" in {
+    val conf = Map(KvReplicaRegionsArg -> "us-west-2,eu-west-1", KvEnableTtlArg -> "false")
+    val kvStore = new SpyingDynamoDBKVStore(client, conf)
+    val dataset = "REPLICA_CALL_VERIFIED_TABLE"
+    kvStore.create(dataset)
+    client.listTables().join().tableNames().contains(dataset) shouldBe true
+    kvStore.replicaCalls.length shouldBe 1
+    kvStore.replicaCalls.head._1 shouldBe dataset
+    kvStore.replicaCalls.head._2 shouldBe List("us-west-2", "eu-west-1")
+  }
+
+  it should "not call addReplicaRegions when no replica regions configured" in {
+    val conf = Map(KvEnableTtlArg -> "false")
+    val kvStore = new SpyingDynamoDBKVStore(client, conf)
+    kvStore.create("NO_REPLICA_REGIONS_TABLE")
+    kvStore.replicaCalls shouldBe empty
+  }
+
+  it should "not call addReplicaRegions when replica regions config is empty string" in {
+    val conf = Map(KvReplicaRegionsArg -> "", KvEnableTtlArg -> "false")
+    val kvStore = new SpyingDynamoDBKVStore(client, conf)
+    kvStore.create("EMPTY_REPLICA_REGIONS_TABLE")
+    kvStore.replicaCalls shouldBe empty
+  }
+
+  it should "call addReplicaRegions after TTL when both are configured" in {
+    // TTL is applied via real DynamoDB Local; addReplicaRegions is intercepted by spy
+    val conf = Map(KvReplicaRegionsArg -> "eu-west-1", KvEnableTtlArg -> "true")
+    val kvStore = new SpyingDynamoDBKVStore(client, conf)
+    val dataset = "TTL_AND_REPLICA_SPY_TABLE"
+    kvStore.create(dataset)
+    client.listTables().join().tableNames().contains(dataset) shouldBe true
+    import software.amazon.awssdk.services.dynamodb.model.DescribeTimeToLiveRequest
+    val ttlResponse =
+      client.describeTimeToLive(DescribeTimeToLiveRequest.builder().tableName(dataset).build()).join()
+    ttlResponse.timeToLiveDescription().timeToLiveStatus().toString shouldBe "ENABLED"
+    // addReplicaRegions called exactly once, after TTL
+    kvStore.replicaCalls.length shouldBe 1
+    kvStore.replicaCalls.head._1 shouldBe dataset
+    kvStore.replicaCalls.head._2 shouldBe List("eu-west-1")
   }
 
   private def validatePutResults(results: Seq[Boolean], expectedCount: Int): Unit = {

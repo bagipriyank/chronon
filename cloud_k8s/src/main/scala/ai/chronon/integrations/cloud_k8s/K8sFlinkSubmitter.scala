@@ -275,7 +275,8 @@ class K8sFlinkSubmitter(
              args: Seq[String],
              serviceAccount: String,
              namespace: String,
-             envVars: Map[String, String] = Map.empty): String = {
+             envVars: Map[String, String] = Map.empty,
+             nodeSelector: Map[String, String] = Map.empty): String = {
 
     val deploymentName = sanitizeDeploymentName(s"flink-$jobId")
     val basePath = maybeFlinkJarsUri.getOrElse(defaultJarsBasePath)
@@ -324,13 +325,16 @@ class K8sFlinkSubmitter(
 
     spec.put(
       "jobManager",
-      buildComponentSpec(memory = jmPodMemory,
-                         cpu = 1.0,
-                         replicas = Some(1),
-                         containerSpec.initContainers,
-                         allEnvVars,
-                         containerSpec.volumeMounts,
-                         containerSpec.volumes)
+      buildComponentSpec(
+        memory = jmPodMemory,
+        cpu = 1.0,
+        replicas = Some(1),
+        containerSpec.initContainers,
+        allEnvVars,
+        containerSpec.volumeMounts,
+        containerSpec.volumes,
+        nodeSelector = nodeSelector
+      )
     )
     spec.put(
       "taskManager",
@@ -341,7 +345,8 @@ class K8sFlinkSubmitter(
         containerSpec.initContainers,
         allEnvVars,
         containerSpec.volumeMounts,
-        containerSpec.volumes
+        containerSpec.volumes,
+        nodeSelector = nodeSelector
       )
     )
 
@@ -475,7 +480,8 @@ class K8sFlinkSubmitter(
       initContainers: java.util.List[java.util.Map[String, Object]],
       envVars: java.util.List[java.util.Map[String, String]],
       volumeMounts: java.util.List[java.util.Map[String, String]],
-      volumes: java.util.List[java.util.Map[String, Object]]): java.util.Map[String, Object] = {
+      volumes: java.util.List[java.util.Map[String, Object]],
+      nodeSelector: Map[String, String] = Map.empty): java.util.Map[String, Object] = {
     val component = new java.util.HashMap[String, Object]()
 
     val resource = new java.util.HashMap[String, Object]()
@@ -498,6 +504,9 @@ class K8sFlinkSubmitter(
                   list
                 })
     podSpec.put("volumes", volumes)
+    if (nodeSelector.nonEmpty) {
+      podSpec.put("nodeSelector", nodeSelector.asJava)
+    }
 
     val podMeta = new java.util.HashMap[String, Object]()
     podMeta.put(
