@@ -886,11 +886,18 @@ object GroupBy {
         Seq.empty
       Seq(source.table) ++ mutationTable
     }.distinct
+    // Collect distinct partition specs across all sources so unfilledRanges checks
+    // each source's partitions using its own spec (e.g. hourly vs daily).
+    // Mutation tables share the same query/spec as their primary source.
+    val sourcePartitionSpecs = groupByConf.sources.toScala
+      .map(_.query.partitionSpec(tableUtils.partitionSpec))
+      .distinct
     val groupByUnfilledRangesOpt = tableUtils.unfilledRanges(
       outputTable,
       PartitionRange(startPartition, endPartition)(tableUtils.partitionSpec),
       Some(sourceTables),
-      skipFirstHole = skipFirstHole
+      skipFirstHole = skipFirstHole,
+      inputPartitionSpecs = sourcePartitionSpecs
     )
 
     if (groupByUnfilledRangesOpt.isEmpty) {
