@@ -879,14 +879,14 @@ object GroupBy {
     val tableProps = Option(groupByConf.metaData.tableProperties)
       .map(_.toScala)
       .orNull
-    // Only include sources that are Hive-partitioned with the output partition column.
-    // Time-partitioned sources (custom partitionColumn != output column) have no Hive
-    // partitions queryable by unfilledRanges, so including them would make all output
-    // partitions appear input-missing and suppress the backfill entirely.
-    val hivePartitionedSources = groupByConf.sources.toScala.filter { source =>
+    // Only include sources whose partitions are catalog-managed (Hive, Iceberg, external tables, etc.)
+    // using the same column as the output. Sources with a custom partitionColumn (virtual/timestamp-based) have no catalog-tracked
+    // partitions, so including them would make all output partitions appear input-missing
+    // and suppress the backfill entirely.
+    val catalogPartitionedSources = groupByConf.sources.toScala.filter { source =>
       Option(source.query.partitionColumn).forall(_ == tableUtils.partitionSpec.column)
     }
-    val sourceTables = hivePartitionedSources.flatMap { source =>
+    val sourceTables = catalogPartitionedSources.flatMap { source =>
       val mutationTable =
         if (source.isSetEntities && source.getEntities.isSetMutationTable)
           Seq(source.getEntities.mutationTable.cleanSpec)
@@ -894,10 +894,9 @@ object GroupBy {
           Seq.empty
       Seq(source.table) ++ mutationTable
     }.distinct
-    // Collect distinct partition specs for Hive-partitioned sources so unfilledRanges
-    // uses each source's own spec (e.g. hourly vs daily) when checking readiness.
-    // Mutation tables share the same query/spec as their primary source.
-    val sourcePartitionSpecs = hivePartitionedSources
+    // Collect distinct partition specs so unfilledRanges uses each source's own spec
+    // (e.g. hourly vs daily) when checking readiness.
+    val sourcePartitionSpecs = catalogPartitionedSources
       .map(_.query.partitionSpec(tableUtils.partitionSpec))
       .distinct
     val inputTablesOpt = if (sourceTables.nonEmpty) Some(sourceTables) else None
