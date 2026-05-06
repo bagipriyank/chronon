@@ -382,7 +382,8 @@ abstract class JoinBase(val joinConfCloned: api.Join,
         if (showDf) leftDfInRange.prettyPrint()
         // set autoExpand = true to ensure backward compatibility due to column ordering changes
 
-        val finalDf = computeRange(leftDfInRange, range, bootstrapInfo, runSmallMode, useBootstrapForLeft, outputLocation)
+        val finalDf =
+          computeRange(leftDfInRange, range, bootstrapInfo, runSmallMode, useBootstrapForLeft, outputLocation)
 
         if (selectedJoinParts.isDefined) {
           assert(finalDf.isEmpty,

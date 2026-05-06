@@ -879,25 +879,34 @@ object GroupBy {
     val tableProps = Option(groupByConf.metaData.tableProperties)
       .map(_.toScala)
       .orNull
-    val sourceTables = groupByConf.sources.toScala.flatMap { source =>
-      val mutationTable = if (source.isSetEntities && source.getEntities.isSetMutationTable)
-        Seq(source.getEntities.mutationTable.cleanSpec)
-      else
-        Seq.empty
+    // Only include sources that are Hive-partitioned with the output partition column.
+    // Time-partitioned sources (custom partitionColumn != output column) have no Hive
+    // partitions queryable by unfilledRanges, so including them would make all output
+    // partitions appear input-missing and suppress the backfill entirely.
+    val hivePartitionedSources = groupByConf.sources.toScala.filter { source =>
+      Option(source.query.partitionColumn).forall(_ == tableUtils.partitionSpec.column)
+    }
+    val sourceTables = hivePartitionedSources.flatMap { source =>
+      val mutationTable =
+        if (source.isSetEntities && source.getEntities.isSetMutationTable)
+          Seq(source.getEntities.mutationTable.cleanSpec)
+        else
+          Seq.empty
       Seq(source.table) ++ mutationTable
     }.distinct
-    // Collect distinct partition specs across all sources so unfilledRanges checks
-    // each source's partitions using its own spec (e.g. hourly vs daily).
+    // Collect distinct partition specs for Hive-partitioned sources so unfilledRanges
+    // uses each source's own spec (e.g. hourly vs daily) when checking readiness.
     // Mutation tables share the same query/spec as their primary source.
-    val sourcePartitionSpecs = groupByConf.sources.toScala
+    val sourcePartitionSpecs = hivePartitionedSources
       .map(_.query.partitionSpec(tableUtils.partitionSpec))
       .distinct
+    val inputTablesOpt = if (sourceTables.nonEmpty) Some(sourceTables) else None
     val groupByUnfilledRangesOpt = tableUtils.unfilledRanges(
       outputTable,
       PartitionRange(startPartition, endPartition)(tableUtils.partitionSpec),
-      Some(sourceTables),
+      inputTablesOpt,
       skipFirstHole = skipFirstHole,
-      inputPartitionSpecs = sourcePartitionSpecs
+      inputPartitionSpecs = if (sourcePartitionSpecs.nonEmpty) sourcePartitionSpecs else Seq(tableUtils.partitionSpec)
     )
 
     if (groupByUnfilledRangesOpt.isEmpty) {
