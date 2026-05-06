@@ -18,6 +18,8 @@ default = Team(
             "CUSTOMER_ID": "dev",
             "FRONTEND_URL": "http://localhost:3000",
             "HUB_URL": "http://localhost:3903",
+            "EVAL_URL": "http://localhost:3904",
+            "FETCHER_URL": "http://localhost:9000",
         },
     ),
 )
