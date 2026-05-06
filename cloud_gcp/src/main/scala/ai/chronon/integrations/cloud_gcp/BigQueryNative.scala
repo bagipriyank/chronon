@@ -28,7 +28,8 @@ case object BigQueryNative extends Format {
                            schema: StructType,
                            partitionColumns: List[String],
                            tableProperties: Map[String, String],
-                           semanticHash: scala.Option[String])(implicit sparkSession: SparkSession): Unit = {
+                           semanticHash: scala.Option[String],
+                           outputLocation: scala.Option[String] = None)(implicit sparkSession: SparkSession): Unit = {
     throw new UnsupportedOperationException("Table creation is not supported for BigQueryNative format.")
   }
 
