@@ -232,7 +232,10 @@ class GroupByUploadTest extends SparkTestBase with Matchers {
       Column("list_event", StringType, 100, nullRate = 0.0), // never null
       Column("views", IntType, 10,  nullRate = 0.0), // never null
     )
-    val eventDf = DataFrameGen.events(spark, eventSchema, count = 1000, partitions = 18)
+    // High count ensures every user has events in every 1-day sub-window. With 10 users and 18
+    // partitions, Window(1, DAYS) collapses to tailHops-only; P(a user has no events in the last
+    // day) = (17/18)^(count/10), so count=10000 makes that probability ~10^-24.
+    val eventDf = DataFrameGen.events(spark, eventSchema, count = 10000, partitions = 18)
 
     // Check the input data is as expected
     eventDf.show(10, truncate = false)
