@@ -161,7 +161,7 @@ class ZiplineHub:
 
             print_info("Token acquired.", format=self.format)
         except (ClientAuthenticationError, CredentialUnavailableError) as e:
-            print_error(
+            print_warning(
                 f"Could not acquire token. Make sure you are logged in via 'az login'. Details: {e}",
                 format=self.format,
             )

@@ -76,6 +76,10 @@ object JobSubmitterConstants {
   val EksNamespaceArgKeyword = "--eks-namespace"
   val EksNodeSelectorArgKeyword = "--eks-node-selector"
 
+  val FlinkDeploymentModeArgKeyword = "--flink-deployment-mode"
+  val FlinkDeploymentModeDefault = "default"
+  val FlinkDeploymentModeApplication = "application"
+
   val SharedInternalArgs: Set[String] = Set(
     JarUriArgKeyword,
     JobTypeArgKeyword,
@@ -99,7 +103,8 @@ object JobSubmitterConstants {
     JobIdArgKeyword,
     EksServiceAccountArgKeyword,
     EksNamespaceArgKeyword,
-    EksNodeSelectorArgKeyword
+    EksNodeSelectorArgKeyword,
+    FlinkDeploymentModeArgKeyword
   )
 
   // Generic spark cluster name environment variable - works across all cloud providers
