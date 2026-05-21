@@ -421,6 +421,12 @@ jobs:
           name: cloud-azure-jar
           path: cloud-azure-jar
 
+      - name: Download Cloud K8s Jar
+        uses: actions/download-artifact@v4
+        with:
+          name: cloud-k8s-jar
+          path: cloud-k8s-jar
+
       - name: Download Service Assembly Jar
         uses: actions/download-artifact@v4
         with:
@@ -433,6 +439,7 @@ jobs:
           cp cloud-aws-jar/out.jar build_output/cloud_aws_lib_deploy.jar
           cp cloud-gcp-jar/out.jar build_output/cloud_gcp_lib_deploy.jar
           cp cloud-azure-jar/out.jar build_output/cloud_azure_lib_deploy.jar
+          cp cloud-k8s-jar/out.jar build_output/cloud_k8s_lib_deploy.jar
           cp service-assembly-jar/out.jar build_output/service_assembly_deploy.jar
 
       - name: Set up Docker Buildx
@@ -768,6 +775,7 @@ jobs:
             flink-assembly-jar
             cloud-aws-jar
             cloud-gcp-jar
+            cloud-k8s-jar
             service-assembly-jar
             pubsub-jar
             kinesis-jar

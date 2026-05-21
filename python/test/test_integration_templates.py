@@ -87,6 +87,9 @@ class TestCompiledConfsExist:
     def test_azure_confs(self):
         self._compile_and_check("azure")
 
+    def test_k8s_confs(self):
+        self._compile_and_check("k8s")
+
 
 class TestDiscoverSources:
     """Verify _discover_sources finds config files for each cloud."""
@@ -112,6 +115,13 @@ class TestDiscoverSources:
         assert "exports.py" in stems
         assert "dim_listings.py" in stems
         assert "demo.py" in stems
+
+    def test_k8s_has_sources(self):
+        sources = _discover_sources(_canary_root, "k8s")
+        stems = {os.path.basename(s) for s in sources}
+        assert "exports.py" in stems
+        assert "purchases.py" in stems
+        assert "training_set.py" in stems
 
 
 class TestRewriteImports:

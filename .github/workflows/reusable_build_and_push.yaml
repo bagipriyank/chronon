@@ -103,6 +103,12 @@ jobs:
           name: cloud-gcp-jar
           path: out/cloud_gcp/${{ env.SCALA_VERSION }}/assembly.dest/out.jar
 
+      - name: Upload Cloud K8s Jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-k8s-jar
+          path: out/cloud_k8s/${{ env.SCALA_VERSION }}/assembly.dest/out.jar
+
 
       - name: Upload Cloud Azure Jar
         uses: actions/upload-artifact@v4
@@ -170,6 +176,12 @@ jobs:
           name: service-assembly-jar
           path: service-assembly-jar
 
+      - name: Download Cloud K8s Jar
+        uses: actions/download-artifact@v4
+        with:
+          name: cloud-k8s-jar
+          path: cloud-k8s-jar
+
       - name: Download Kinesis Jar
         uses: actions/download-artifact@v4
         with:
@@ -180,6 +192,7 @@ jobs:
         run: |
           mv flink-assembly-jar/out.jar flink_assembly_deploy.jar
           mv cloud-aws-jar/out.jar cloud_aws_lib_deploy.jar
+          mv cloud-k8s-jar/out.jar cloud_k8s_lib_deploy.jar
           mv service-assembly-jar/out.jar service_assembly_deploy.jar
           mv kinesis-jar/out.jar connectors_kinesis_deploy.jar
 
@@ -196,6 +209,7 @@ jobs:
           aws s3 cp ${{ needs.build_artifacts.outputs.wheel_name }} s3://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/wheels/ --metadata="updated_date=$(date),commit=$(git rev-parse HEAD),branch=$(git rev-parse --abbrev-ref HEAD)"
           aws s3 cp flink_assembly_deploy.jar s3://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/flink_assembly_deploy.jar --metadata="updated_date=$(date),commit=$(git rev-parse HEAD),branch=$(git rev-parse --abbrev-ref HEAD)"
           aws s3 cp cloud_aws_lib_deploy.jar s3://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/cloud_aws_lib_deploy.jar --metadata="updated_date=$(date),commit=$(git rev-parse HEAD),branch=$(git rev-parse --abbrev-ref HEAD)"
+          aws s3 cp cloud_k8s_lib_deploy.jar s3://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/cloud_k8s_lib_deploy.jar --metadata="updated_date=$(date),commit=$(git rev-parse HEAD),branch=$(git rev-parse --abbrev-ref HEAD)"
           aws s3 cp service_assembly_deploy.jar s3://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/service_assembly_deploy.jar --metadata="updated_date=$(date),commit=$(git rev-parse HEAD),branch=$(git rev-parse --abbrev-ref HEAD)"
           aws s3 cp connectors_kinesis_deploy.jar s3://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/connectors_kinesis_deploy.jar --metadata="updated_date=$(date),commit=$(git rev-parse HEAD),branch=$(git rev-parse --abbrev-ref HEAD)"
 
@@ -233,6 +247,12 @@ jobs:
           name: service-assembly-jar
           path: service-assembly-jar
 
+      - name: Download Cloud K8s Jar
+        uses: actions/download-artifact@v4
+        with:
+          name: cloud-k8s-jar
+          path: cloud-k8s-jar
+
       - name: Download PubSub Jar
         uses: actions/download-artifact@v4
         with:
@@ -243,6 +263,7 @@ jobs:
         run: |
           mv flink-assembly-jar/out.jar flink_assembly_deploy.jar
           mv cloud-gcp-jar/out.jar cloud_gcp_lib_deploy.jar
+          mv cloud-k8s-jar/out.jar cloud_k8s_lib_deploy.jar
           mv service-assembly-jar/out.jar service_assembly_deploy.jar
           mv pubsub-jar/out.jar connectors_pubsub_deploy.jar
 
@@ -268,6 +289,9 @@ jobs:
 
           gcloud storage cp cloud_gcp_lib_deploy.jar gs://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/cloud_gcp_lib_deploy.jar
           gcloud storage objects update gs://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/cloud_gcp_lib_deploy.jar --custom-metadata="updated_date=$(date),commit=$(git rev-parse HEAD),branch=$(git rev-parse --abbrev-ref HEAD)"
+
+          gcloud storage cp cloud_k8s_lib_deploy.jar gs://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/cloud_k8s_lib_deploy.jar
+          gcloud storage objects update gs://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/cloud_k8s_lib_deploy.jar --custom-metadata="updated_date=$(date),commit=$(git rev-parse HEAD),branch=$(git rev-parse --abbrev-ref HEAD)"
 
           gcloud storage cp service_assembly_deploy.jar gs://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/service_assembly_deploy.jar
           gcloud storage objects update gs://zipline-artifacts-canary/release/${{ needs.build_artifacts.outputs.version }}/jars/service_assembly_deploy.jar --custom-metadata="updated_date=$(date),commit=$(git rev-parse HEAD),branch=$(git rev-parse --abbrev-ref HEAD)"
@@ -317,9 +341,16 @@ jobs:
           name: cloud-azure-jar
           path: cloud-azure-jar
 
+      - name: Download Cloud K8s Jar
+        uses: actions/download-artifact@v4
+        with:
+          name: cloud-k8s-jar
+          path: cloud-k8s-jar
+
       - name: Rename JAR files to expected names
         run: |
           mv cloud-azure-jar/out.jar cloud_azure_lib_deploy.jar
+          mv cloud-k8s-jar/out.jar cloud_k8s_lib_deploy.jar
           mv flink-assembly-jar/out.jar flink_assembly_deploy.jar
           mv service-assembly-jar/out.jar service_assembly_deploy.jar
 
@@ -337,6 +368,14 @@ jobs:
             --container-name $CONTAINER \
             --file cloud_azure_lib_deploy.jar \
             --name release/${VERSION}/jars/cloud_azure_lib_deploy.jar \
+            --overwrite
+
+          az storage blob upload \
+            --account-name $ACCOUNT \
+            --auth-mode login \
+            --container-name $CONTAINER \
+            --file cloud_k8s_lib_deploy.jar \
+            --name release/${VERSION}/jars/cloud_k8s_lib_deploy.jar \
             --overwrite
 
           az storage blob upload \

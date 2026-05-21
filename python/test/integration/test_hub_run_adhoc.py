@@ -62,6 +62,8 @@ def test_run_adhoc(confs, chronon_root, hub_url, cloud, flink_cleanup):
 @pytest.mark.integration
 def test_run_adhoc_no_data(confs, chronon_root, hub_url, cloud):
     """run-adhoc with dates that have no input data should fail."""
+    if cloud == "k8s":
+        pytest.skip("k8s canary configs do not yet include a demo join for hub run-adhoc tests")
     runner = CliRunner()
     compile_configs(runner, chronon_root)
 

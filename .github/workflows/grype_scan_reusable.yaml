@@ -42,6 +42,9 @@ jobs:
       - name: Build Cloud AWS JAR
         run: ./mill cloud_aws\[${{ env.SCALA_VERSION }}\].assembly
 
+      - name: Build Cloud K8s JAR
+        run: ./mill cloud_k8s\[${{ env.SCALA_VERSION }}\].assembly
+
       - name: Build Cloud Azure JAR
         run: ./mill cloud_azure\[${{ env.SCALA_VERSION }}\].assembly
 
@@ -61,6 +64,7 @@ jobs:
           cp out/service/${{ env.SCALA_VERSION }}/assembly.dest/out.jar build_output/service_assembly_deploy.jar
           cp out/cloud_gcp/${{ env.SCALA_VERSION }}/assembly.dest/out.jar build_output/cloud_gcp_lib_deploy.jar
           cp out/cloud_aws/${{ env.SCALA_VERSION }}/assembly.dest/out.jar build_output/cloud_aws_lib_deploy.jar
+          cp out/cloud_k8s/${{ env.SCALA_VERSION }}/assembly.dest/out.jar build_output/cloud_k8s_lib_deploy.jar
           cp out/cloud_azure/${{ env.SCALA_VERSION }}/assembly.dest/out.jar build_output/cloud_azure_lib_deploy.jar
 
       - name: Set up Docker Buildx
@@ -93,6 +97,12 @@ jobs:
         with:
           name: grype-cloud-aws-jar
           path: out/cloud_aws/${{ env.SCALA_VERSION }}/assembly.dest/out.jar
+
+      - name: Upload Cloud K8s Jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-cloud-k8s-jar
+          path: out/cloud_k8s/${{ env.SCALA_VERSION }}/assembly.dest/out.jar
 
       - name: Upload Cloud Azure Jar
         uses: actions/upload-artifact@v4
@@ -141,6 +151,10 @@ jobs:
             fail_on: low
           - artifact: cloud-aws
             artifact_name: grype-cloud-aws-jar
+            scan_type: jar
+            fail_on: low
+          - artifact: cloud-k8s
+            artifact_name: grype-cloud-k8s-jar
             scan_type: jar
             fail_on: low
           - artifact: cloud-azure

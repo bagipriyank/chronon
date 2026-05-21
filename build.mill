@@ -119,7 +119,14 @@ object Constants {
   val avroVersion = "1.12.1"
   val protobufVersion = "3.25.5"
   val jettyVersion = "12.0.33"
-  
+  // Vert.x is a runtime dep of fabric8 kubernetes-client used by K8sSubmitter; pinned here so
+  // cloud_k8s and any future K8s-targeted module share a single coordinated version.
+  val vertxVersion = "4.5.27"
+  // Netty is pulled in transitively by Vert.x and fabric8 kubernetes-client at mismatched
+  // 4.1.x patch levels; pinned here so every K8s/Flink-flavored assembly shares a single
+  // CVE-clear version. Bump when grype flags new GHSAs against 4.1.x codec/handler modules.
+  val nettyVersion = "4.1.133.Final"
+
   // Common JVM arguments for all test modules
   def commonTestForkArgs = Seq(
     "--add-opens=java.base/java.lang=ALL-UNNAMED",
@@ -408,6 +415,7 @@ trait ArtifactsModule extends Cross.Module[String] {
       flink(scalaVersion).assembly(),
       cloud_gcp(scalaVersion).assembly(),
       cloud_aws(scalaVersion).assembly(),
+      cloud_k8s(scalaVersion).assembly(),
       cloud_azure(scalaVersion).assembly(),
       service(scalaVersion).assembly(),
       flink_connectors.pubsub(scalaVersion).assembly(),

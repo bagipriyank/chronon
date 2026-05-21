@@ -43,6 +43,7 @@ from ai.chronon.repo.constants import (
     AZURE,
     CLOUD_PROVIDER_KEYWORD,
     GCP,
+    K8S,
     MODE_ARGS,
     ONLINE_CLASS_ARG,
     ONLINE_JAR_ARG,
@@ -57,6 +58,7 @@ from ai.chronon.repo.gcp import (
     ZIPLINE_GCP_ONLINE_CLASS_DEFAULT,
     GcpRunner,
 )
+from ai.chronon.repo.k8s_runner import ZIPLINE_K8S_JAR_DEFAULT, K8sRunner
 from ai.chronon.repo.utils import get_environ_arg, resolve_conf, set_runtime_env_v3
 
 
@@ -284,6 +286,13 @@ def validate_additional_jars(ctx, param, value):
     type=click.Choice(["spark", "bigquery"], case_sensitive=False),
     help="Bulk put uploader to use when load data to kv store, applied to upload-to-kv mode",
 )
+@click.option(
+    "--k8s-submission-mode",
+    type=click.Choice(["spark-submit", "spark-operator"], case_sensitive=False),
+    default=None,
+    help="K8s Spark submission mode (sets CHRONON_K8S_SUBMISSION_MODE for the K8sSubmitter JVM). "
+    "When omitted, uses existing env or defaults to spark-submit.",
+)
 @click.pass_context
 def main(
     ctx,
@@ -327,6 +336,7 @@ def main(
     flink_deployment_mode,
     debug,
     uploader,
+    k8s_submission_mode,
 ):
     """Run a Zipline pipeline.
 
@@ -371,6 +381,11 @@ def main(
         ctx.params[ONLINE_CLASS_ARG] = ZIPLINE_AZURE_ONLINE_CLASS_DEFAULT
         ctx.params[CLOUD_PROVIDER_KEYWORD] = cloud_provider
         AzureRunner(ctx.params).run()
+    elif cloud_provider.upper() == K8S:
+        ctx.params[ONLINE_JAR_ARG] = ZIPLINE_K8S_JAR_DEFAULT
+        # K8s uses java -cp ... K8sSubmitter, no online entrypoint to set here.
+        ctx.params[CLOUD_PROVIDER_KEYWORD] = cloud_provider
+        K8sRunner(ctx.params).run()
     else:
         raise ValueError(f"Unsupported cloud provider: {cloud_provider}")
 

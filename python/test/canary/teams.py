@@ -247,6 +247,34 @@ quickstart = Team(
     ),
 )
 
+k8s = Team(
+    outputNamespace="data",
+    env=EnvironmentVariables(
+        common={
+            "CLOUD_PROVIDER": "k8s",
+            "CUSTOMER_ID": "canary",
+            "VERSION": "latest",
+            "ARTIFACT_PREFIX": "s3a://warehouse",
+            "WAREHOUSE_PREFIX": "s3a://warehouse",
+            "HUB_URL": "http://localhost:3903",
+            "FRONTEND_URL": "http://localhost:3000",
+        },
+    ),
+    conf=ConfigProperties(
+        common={
+            "spark.chronon.partition.format": "yyyy-MM-dd",
+            "spark.chronon.partition.column": "ds",
+            "spark.chronon.coalesce.factor": "10",
+            "spark.default.parallelism": "10",
+            "spark.sql.shuffle.partitions": "10",
+            "spark.driver.memory": "512m",
+            "spark.driver.cores": "1",
+            "spark.executor.memory": "512m",
+            "spark.executor.cores": "1",
+        },
+    ),
+)
+
 azure = Team(
     outputNamespace="data",
     env=EnvironmentVariables(

@@ -19,6 +19,8 @@ DEMO_BACKFILL = {
 @pytest.mark.integration
 def test_schedule_lifecycle(confs, test_id, chronon_root, hub_url, cloud):
     """Deploy a schedule, verify it exists, delete it, verify it's gone."""
+    if cloud == "k8s":
+        pytest.skip("k8s canary configs do not yet include a demo join for hub schedule tests")
     runner = CliRunner()
     compile_configs(runner, chronon_root)
 

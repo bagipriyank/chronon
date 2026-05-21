@@ -153,12 +153,13 @@ RENDER_INFO_DEFAULT_SCRIPT = "scripts/render_info.py"
 ZIPLINE_DIRECTORY = "/tmp/zipline"
 
 CLOUD_PROVIDER_KEYWORD = "CLOUD_PROVIDER"
-VALID_CLOUDS = ("gcp", "aws", "azure")
+VALID_CLOUDS = ("gcp", "aws", "azure", "k8s")
 
 # cloud provider
 AWS = "AWS"
 AZURE = "AZURE"
 GCP = "GCP"
+K8S = "K8S"
 
 # arg keywords
 ONLINE_CLASS_ARG = "online_class"

@@ -21,6 +21,8 @@ DEMO_DERIVATIONS = {
 @pytest.mark.integration
 def test_backfill_no_data(confs, chronon_root, hub_url, cloud):
     """Backfill with dates that have no input data should result in a failed workflow."""
+    if cloud == "k8s":
+        pytest.skip("k8s canary configs do not yet include demo derivations for hub backfill tests")
     runner = CliRunner()
     compile_configs(runner, chronon_root)
 
@@ -45,6 +47,8 @@ MULTIDAY_BACKFILL = {
 @pytest.mark.integration
 def test_backfill_multiday(confs, chronon_root, hub_url, cloud):
     """Multi-day backfill exercises multi-step allocation."""
+    if cloud == "k8s":
+        pytest.skip("k8s canary configs do not yet include demo derivations for hub backfill tests")
     runner = CliRunner()
     compile_configs(runner, chronon_root)
 

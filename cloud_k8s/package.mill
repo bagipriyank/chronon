@@ -19,14 +19,31 @@ trait CloudK8sModule extends Cross.Module[String] with build.BaseModule {
       .exclude("com.fasterxml.jackson.core" -> "jackson-annotations")
       .exclude("com.fasterxml.jackson.dataformat" -> "jackson-dataformat-yaml")
       .exclude("com.fasterxml.jackson.datatype" -> "jackson-datatype-jsr310"),
-    mvn"io.vertx:vertx-core:4.5.27",
-    mvn"io.vertx:vertx-web-client:4.5.27",
-  )
+    // Required at runtime by KubeConfigUtils.parseConfig when K8sSubmitter builds a fabric8
+    // client via Config.autoConfigure; pinned to keep YAML parsing aligned with the explicitly
+    // forced jackson-core/databind/annotations versions above.
+    mvn"com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:${build.Constants.jacksonVersion}".forceVersion(),
+    mvn"io.vertx:vertx-core:${build.Constants.vertxVersion}",
+    mvn"io.vertx:vertx-web-client:${build.Constants.vertxVersion}",
+  ) ++ Seq(
+    mvn"io.netty:netty-codec:${build.Constants.nettyVersion}",
+    mvn"io.netty:netty-codec-http:${build.Constants.nettyVersion}",
+    mvn"io.netty:netty-codec-http2:${build.Constants.nettyVersion}",
+    mvn"io.netty:netty-codec-dns:${build.Constants.nettyVersion}",
+    mvn"io.netty:netty-codec-mqtt:${build.Constants.nettyVersion}",
+    mvn"io.netty:netty-codec-redis:${build.Constants.nettyVersion}",
+    mvn"io.netty:netty-handler-proxy:${build.Constants.nettyVersion}",
+  ).map(_.forceVersion())
 
   object test extends build.BaseTestModule {
     def scalaVersion = crossValue
     def moduleDeps = Seq(build.cloud_k8s(crossValue))
-    def mvnDeps = super.mvnDeps() ++ build.Constants.testDeps
+    def mvnDeps = super.mvnDeps() ++ build.Constants.testDeps ++ Seq(
+      mvn"io.fabric8:kubernetes-server-mock:7.5.2"
+        .exclude("com.fasterxml.jackson.core" -> "jackson-core")
+        .exclude("com.fasterxml.jackson.core" -> "jackson-databind")
+        .exclude("com.fasterxml.jackson.core" -> "jackson-annotations"),
+    )
     override def testFramework = "org.scalatest.tools.Framework"
     def forkArgs = build.Constants.commonTestForkArgs
   }

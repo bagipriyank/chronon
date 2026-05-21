@@ -72,9 +72,11 @@ def extract_filename_from_path(path):
     return os.path.basename(path)
 
 
-def check_call(cmd):
+def check_call(cmd, env=None):
     LOG.info("Running command: " + cmd)
-    return subprocess.check_call(cmd.split(), bufsize=0)
+    if env is None:
+        return subprocess.check_call(cmd.split(), bufsize=0)
+    return subprocess.check_call(cmd.split(), bufsize=0, env=env)
 
 
 def check_output(cmd, timeout=None, streaming=False):

@@ -79,7 +79,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--cloud",
         default=os.environ.get("CLOUD", "gcp"),
-        choices=("gcp", "aws", "azure"),
+        choices=("gcp", "aws", "azure", "k8s"),
         help="Cloud provider (env: CLOUD)",
     )
 
