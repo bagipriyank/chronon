@@ -174,10 +174,14 @@ object JoinUtils {
     implicit val tu: TableUtils = tableUtils
     val leftSpec = leftSource.query.partitionSpec(tableUtils.partitionSpec)
 
+    // firstAvailablePartition normalizes results back to TableUtils' default spec; translate
+    // back into leftSpec so the constructed PartitionRange has start/end values that match
+    // its tagged spec. Without this, heterogeneous-partition joins build a mixed-format
+    // range (default-format start, custom-format end) that silently collapses downstream.
     val firstAvailablePartitionOpt =
-      tableUtils.firstAvailablePartition(leftSource.table,
-                                         leftSpec,
-                                         subPartitionFilters = leftSource.subPartitionFilters)
+      tableUtils
+        .firstAvailablePartition(leftSource.table, leftSpec, subPartitionFilters = leftSource.subPartitionFilters)
+        .map(p => if (leftSpec == tableUtils.partitionSpec) p else tableUtils.partitionSpec.translate(p, leftSpec))
     val configuredStartPartition = Option(leftSource.query.startPartition)
       .orElse(Option(leftSource.rootQuery).flatMap(query => Option(query.startPartition)))
     lazy val defaultLeftStart = configuredStartPartition

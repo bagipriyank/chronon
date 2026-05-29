@@ -444,21 +444,30 @@ class TableUtils(@transient val sparkSession: SparkSession) extends Serializable
 
       outputPartitionRange
     }
+
+    // Heterogeneous-partition joins arrive with validPartitionRange in the left source's
+    // spec (e.g. yyyyMMdd) while outputExisting is read in the default spec (yyyy-MM-dd).
+    // Without canonicalizing first, the set-diffs below see zero overlap and silently
+    // collapse the join's compute range to nothing.
+    val canonicalRange =
+      if (validPartitionRange.partitionSpec == partitionSpec) validPartitionRange
+      else validPartitionRange.translate(partitionSpec)
+
     val outputExisting = partitions(outputTable)
     // To avoid recomputing partitions removed by retention mechanisms we will not fill holes in the very beginning of the range
     // If a user fills a new partition in the newer end of the range, then we will never fill any partitions before that range.
     // We instead log a message saying why we won't fill the earliest hole.
     val cutoffPartition = if (outputExisting.nonEmpty) {
-      Format.pickMaxPartition(Seq(outputExisting.min, outputPartitionRange.start)).getOrElse(outputPartitionRange.start)
+      Format.pickMaxPartition(Seq(outputExisting.min, canonicalRange.start)).getOrElse(canonicalRange.start)
     } else {
-      validPartitionRange.start
+      canonicalRange.start
     }
 
     val fillablePartitions =
       if (skipFirstHole) {
-        validPartitionRange.partitions.toSet.filter(_ >= cutoffPartition)
+        canonicalRange.partitions.toSet.filter(_ >= cutoffPartition)
       } else {
-        validPartitionRange.partitions.toSet
+        canonicalRange.partitions.toSet
       }
 
     val outputMissing = fillablePartitions -- outputExisting
@@ -474,6 +483,9 @@ class TableUtils(@transient val sparkSession: SparkSession) extends Serializable
                                    Option(outputPartitionRange),
                                    tablePartitionSpec = Some(inputPartitionSpec))
       ) yield {
+        // partitions(..., tablePartitionSpec = Some(...)) already returns values in the
+        // TableUtils default spec, so the shift below parses them correctly even when the
+        // input table uses a non-default partition format.
         partitionSpec.shift(partitionStr, inputToOutputShift)
       }
 
