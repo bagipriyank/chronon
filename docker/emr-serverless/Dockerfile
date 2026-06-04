@@ -10,9 +10,14 @@ ARG EMR_BASE_IMAGE=public.ecr.aws/emr-serverless/spark/emr-7.12.0@sha256:7e80085
 FROM ${EMR_BASE_IMAGE}
 
 LABEL io.zipline.delta-spark.source="https://github.com/zipline-ai/delta/tree/v3.3.2-spark-3.5.3"
+LABEL io.zipline.unitycatalog.source="https://github.com/zipline-ai/unitycatalog/tree/spark-3.5-scala-2.12"
 
 ARG DELTA_SPARK_JAR=delta-spark_2.12-3.3.2.jar
 ARG DELTA_LIB_DIR=/usr/share/aws/delta/lib
+
+ARG UC_HADOOP_JAR=unitycatalog-hadoop-0.4.0.jar
+ARG UC_CLIENT_JAR=unitycatalog-client-0.4.0.jar
+ARG EMRFS_AUXLIB_DIR=/usr/share/aws/emr/emrfs/auxlib
 
 USER root
 
@@ -28,5 +33,21 @@ RUN set -eux; \
     chown hadoop:hadoop ${DELTA_LIB_DIR}/${DELTA_SPARK_JAR}; \
     chown -h hadoop:hadoop ${DELTA_LIB_DIR}/delta-spark.jar; \
     chmod 0644 ${DELTA_LIB_DIR}/${DELTA_SPARK_JAR}
+
+# Unity Catalog credential vending/renewal: hadoop-aws resolves
+# fs.s3a.aws.credentials.provider with its own classloader (S3AUtils.java:641),
+# so AwsVendedTokenProvider must sit on the same system classpath as
+# hadoop-aws.jar — not inside the Chronon uber jar. emrfs/auxlib/* is already a
+# wildcard entry on the image's built-in spark.{driver,executor}.extraClassPath,
+# which makes it the designated drop-in point. Without these jars,
+# spark.sql.catalog.<catalog>.renewCredential.enabled=true fails with
+# ClassNotFoundException.
+COPY ${UC_HADOOP_JAR} ${UC_CLIENT_JAR} ${EMRFS_AUXLIB_DIR}/
+
+RUN set -eux; \
+    chown hadoop:hadoop ${EMRFS_AUXLIB_DIR}/${UC_HADOOP_JAR} \
+                        ${EMRFS_AUXLIB_DIR}/${UC_CLIENT_JAR}; \
+    chmod 0644 ${EMRFS_AUXLIB_DIR}/${UC_HADOOP_JAR} \
+               ${EMRFS_AUXLIB_DIR}/${UC_CLIENT_JAR}
 
 USER hadoop:hadoop

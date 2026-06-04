@@ -93,7 +93,7 @@ trait CloudGcpModule extends Cross.Module[String] with build.BaseModule {
       mvn"com.google.cloud:google-cloud-bigquery:2.54.1",
       mvn"com.google.cloud:google-cloud-bigtable:2.57.1",
       mvn"com.google.cloud:google-cloud-aiplatform:3.79.0",
-      mvn"io.vertx:vertx-web-client:4.5.24",
+      mvn"io.vertx:vertx-web-client:4.5.27",
       mvn"com.google.auth:google-auth-library-oauth2-http:1.40.0",
       mvn"com.google.cloud:google-cloud-secretmanager:2.49.0",
   ).map(excludeJackson) ++ Seq(

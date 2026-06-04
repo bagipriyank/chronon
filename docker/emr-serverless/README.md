@@ -1,8 +1,14 @@
 # EMR Serverless Custom Image
 
-Custom EMR Serverless 7.12.0 Spark image that swaps the bundled `delta-spark`
-jar for a Zipline-patched build. Everything else (Spark 3.5.3, Hadoop,
-`delta-storage`, etc.) is left untouched.
+Custom EMR Serverless 7.12.0 Spark image that:
+
+- swaps the bundled `delta-spark` jar for a Zipline-patched build, and
+- adds the Unity Catalog connector jars to the system classpath so UC
+  credential vending/renewal works (see
+  [why](#why-the-unity-catalog-jars-are-in-the-image)).
+
+Everything else (Spark 3.5.3, Hadoop, `delta-storage`, etc.) is left
+untouched.
 
 See the [AWS custom images guide](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/using-custom-images.html).
 
@@ -18,7 +24,38 @@ See the [AWS custom images guide](https://docs.aws.amazon.com/emr/latest/EMR-Ser
    `spark-defaults.conf` puts the **symlink** (not the versioned filename) on
    `spark.driver.extraClassPath` / `spark.executor.extraClassPath`, so leaving
    it dangling drops Delta off the classpath.
-4. Ends as `USER hadoop:hadoop` (required by EMR Serverless).
+4. Drops the Unity Catalog jars (`unitycatalog-hadoop`, `unitycatalog-client`)
+   into `/usr/share/aws/emr/emrfs/auxlib/`.
+5. Ends as `USER hadoop:hadoop` (required by EMR Serverless).
+
+## Why the Unity Catalog jars are in the image
+
+UC credential renewal
+(`spark.sql.catalog.<catalog>.renewCredential.enabled=true`) works by setting
+`fs.s3a.aws.credentials.provider` to UC's `AwsVendedTokenProvider`. Hadoop's
+S3A resolves that class with **its own classloader**
+(`S3AUtils.class.getClassLoader()`), which only sees the system classpath —
+never the Chronon uber jar (Spark loads application jars in a child
+classloader). With the stock image, enabling renewal therefore fails with
+`ClassNotFoundException: io.unitycatalog.hadoop.internal.auth.AwsVendedTokenProvider`.
+
+`/usr/share/aws/emr/emrfs/auxlib/*` is a wildcard entry on the image's
+built-in `spark.{driver,executor}.extraClassPath` (same classloader as
+`hadoop-aws.jar`), which makes it the designated drop-in point for the UC
+jars. Teams that keep `renewCredential.enabled=false` are unaffected by their
+presence.
+
+> **Keep in sync:** `unitycatalog-hadoop-0.4.0.jar` and
+> `unitycatalog-client-0.4.0.jar` are copies of the jars in `cloud_aws/`
+> (built from
+> [zipline-ai/unitycatalog@spark-3.5-scala-2.12](https://github.com/zipline-ai/unitycatalog/tree/spark-3.5-scala-2.12)).
+> When those get refreshed, copy the new jars here and rebuild/push the
+> image. UC's POM lists `jackson-databind-nullable` as a runtime dep, but
+> bytecode inspection of `unitycatalog-{client,hadoop}-0.4.0.jar` shows no
+> references to `org.openapitools.jackson.nullable.*` — so it's deliberately
+> omitted from this image. If a future UC bump starts using it, add it the
+> same way the EMR base already ships `jackson-databind`/`jsr310`/`jsr305`/
+> `jakarta.annotation`.
 
 ## How to use it
 
@@ -125,3 +162,11 @@ aws emr-serverless stop-application \
   the Dockerfile header for how to fetch the current digest.
 - `DELTA_SPARK_JAR` (default `delta-spark_2.12-3.3.2.jar`) — expected jar
   filename in the build context.
+- `UC_HADOOP_JAR` (default `unitycatalog-hadoop-0.4.0.jar`),
+  `UC_CLIENT_JAR` (default `unitycatalog-client-0.4.0.jar`) — Unity Catalog
+  connector jars placed on the system classpath. Filenames must match jars in
+  the build context.
+- `EMRFS_AUXLIB_DIR` (default `/usr/share/aws/emr/emrfs/auxlib`) — where the
+  UC jars land inside the image. Don't change this unless EMR's built-in
+  extraClassPath changes; it must remain a directory the base image already
+  has on the Spark classpath.

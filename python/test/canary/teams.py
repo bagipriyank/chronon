@@ -298,7 +298,7 @@ azure = Team(
 )
 
 aws_databricks = Team(
-    outputNamespace="data",
+    outputNamespace="workspace_iceberg.poc",
     env=EnvironmentVariables(
         common={
             "CLOUD_PROVIDER": "aws",
@@ -307,10 +307,9 @@ aws_databricks = Team(
             "AWS_REGION": "us-west-2",
             "SPARK_CLUSTER_NAME": "zipline-emr-canary",
             "ARTIFACT_PREFIX": "s3://zipline-artifacts-canary",
-            # TODO: To move warehouse location to canary instead of dev blocked by databricks setup
-            "WAREHOUSE_PREFIX": "s3://zipline-warehouse-dev",
-            "FRONTEND_URL": "http://localhost:3000",
-            "HUB_URL": "http://localhost:3903",
+            "WAREHOUSE_PREFIX": "s3://zipline-warehouse-canary",
+            "FRONTEND_URL": "https://canary-aws.zipline.ai",
+            "HUB_URL": "https://canary-orch-aws.zipline.ai",
         },
     ),
     conf=ConfigProperties(
@@ -344,7 +343,7 @@ aws_databricks = Team(
             "spark.chronon.partition.column": "ds",
             "spark.chronon.partition.format": "yyyy-MM-dd",
 
-            "spark.sql.warehouse.dir": "s3://zipline-warehouse-dev/data/uc-poc/warehouse/",
+            "spark.sql.warehouse.dir": "s3://zipline-warehouse-canary/data/uc-poc/warehouse/",
             "spark.chronon.coalesce.factor": "10",
             "spark.default.parallelism": "10",
             "spark.sql.shuffle.partitions": "10",

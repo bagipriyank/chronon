@@ -35,3 +35,62 @@ v1 = GroupBy(
     output_namespace="workspace_iceberg.poc",
 )
 
+# Smaller select set used by the four partitioned/unpartitioned × dense/sparse
+# canary variants below. Keeps backfill payload tight when only listing_id is
+# joined on the left side.
+_pt_selects = selects(
+    listing_id="listing_id",
+    merchant_id="merchant_id",
+    headline="headline",
+    price_cents="price_cents",
+    currency="currency",
+    is_active="is_active",
+)
+
+pt_v1 = GroupBy(
+    sources=[EntitySource(
+        snapshot_table=exports.dim_listings_pt.table,
+        query=Query(selects=_pt_selects, start_partition="2025-01-01"),
+    )],
+    keys=["listing_id"],
+    online=False,
+    version=0,
+    aggregations=None,
+    step_days=30,
+)
+
+sparse_v1 = GroupBy(
+    sources=[EntitySource(
+        snapshot_table=exports.dim_listings_sparse.table,
+        query=Query(selects=_pt_selects, start_partition="2025-01-01"),
+    )],
+    keys=["listing_id"],
+    online=False,
+    version=0,
+    aggregations=None,
+    step_days=30,
+)
+
+unpartitioned_v1 = GroupBy(
+    sources=[EntitySource(
+        snapshot_table=exports.dim_listings_unpartitioned.table,
+        query=Query(selects=_pt_selects, start_partition="2025-01-01"),
+    )],
+    keys=["listing_id"],
+    online=False,
+    version=0,
+    aggregations=None,
+    step_days=30,
+)
+
+unpartitioned_sparse_v1 = GroupBy(
+    sources=[EntitySource(
+        snapshot_table=exports.dim_listings_unpartitioned_sparse.table,
+        query=Query(selects=_pt_selects, start_partition="2025-01-01"),
+    )],
+    keys=["listing_id"],
+    online=False,
+    version=0,
+    aggregations=None,
+    step_days=30,
+)

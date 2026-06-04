@@ -23,6 +23,19 @@ logger = logging.getLogger(__name__)
 # Config directories that contain .py source files to template.
 _CONFIG_DIRS = ("staging_queries", "group_bys", "joins", "models")
 
+# Additional team-folder names to discover alongside a given cloud. Lets a
+# cloud's test_id rewriting pick up team-specific siblings — e.g. the Unity
+# Catalog `aws_databricks` team lives under canary/{joins,group_bys,
+# staging_queries}/aws_databricks/ but its UC backfill tests run under
+# CLOUD=aws, so the templating needs to copy/clean those alongside aws/*.
+_EXTRA_CLOUD_DIRS: dict[str, tuple[str, ...]] = {
+    "aws": ("aws_databricks",),
+}
+
+
+def _all_cloud_dirs(cloud: str) -> tuple[str, ...]:
+    return (cloud, *_EXTRA_CLOUD_DIRS.get(cloud, ()))
+
 
 # ---------------------------------------------------------------------------
 # Discovery
@@ -31,22 +44,28 @@ _CONFIG_DIRS = ("staging_queries", "group_bys", "joins", "models")
 def _discover_sources(chronon_root: str, cloud: str) -> list[str]:
     """Return all .py config files under *chronon_root*/{config_dir}/*cloud*/.
 
-    Skips ``__init__.py`` files.
+    Skips ``__init__.py`` files. Also includes any team-folder siblings declared
+    in ``_EXTRA_CLOUD_DIRS`` (e.g. ``aws_databricks`` for ``cloud="aws"``).
     """
     sources: list[str] = []
-    for config_dir in _CONFIG_DIRS:
-        pattern = os.path.join(chronon_root, config_dir, cloud, "*.py")
-        sources.extend(
-            p for p in glob.glob(pattern)
-            if os.path.basename(p) != "__init__.py"
-        )
+    for cd in _all_cloud_dirs(cloud):
+        for config_dir in _CONFIG_DIRS:
+            pattern = os.path.join(chronon_root, config_dir, cd, "*.py")
+            sources.extend(
+                p for p in glob.glob(pattern)
+                if os.path.basename(p) != "__init__.py"
+            )
     return sorted(sources)
 
 
 def _collect_py_files(chronon_root: str, cloud: str) -> list[str]:
     """Return all .py config files under *chronon_root* for *cloud*."""
-    pattern = os.path.join(chronon_root, "**", cloud, "*.py")
-    return [p for p in glob.glob(pattern, recursive=True) if os.path.basename(p) != "__init__.py"]
+    files: list[str] = []
+    for cd in _all_cloud_dirs(cloud):
+        pattern = os.path.join(chronon_root, "**", cd, "*.py")
+        files.extend(p for p in glob.glob(pattern, recursive=True)
+                     if os.path.basename(p) != "__init__.py")
+    return files
 
 
 # ---------------------------------------------------------------------------

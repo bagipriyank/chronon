@@ -12,8 +12,8 @@ trait ServiceModule extends Cross.Module[String] with build.BaseModule {
 
   def mvnDeps = build.Constants.commonDeps ++ build.Constants.loggingDeps ++ build.Constants.utilityDeps ++
     Seq(
-      mvn"io.vertx:vertx-core:4.5.24",
-      mvn"io.vertx:vertx-web:4.5.24",
+      mvn"io.vertx:vertx-core:4.5.27",
+      mvn"io.vertx:vertx-web:4.5.27",
       mvn"io.micrometer:micrometer-registry-otlp:1.13.6".exclude("com.google.protobuf" -> "protobuf-java"),
       mvn"io.micrometer:micrometer-registry-prometheus:1.10.13".exclude("com.google.protobuf" -> "protobuf-java"),
       mvn"org.scala-lang:scala-reflect:${scalaVersion()}",
@@ -65,7 +65,7 @@ trait ServiceModule extends Cross.Module[String] with build.BaseModule {
       mvn"junit:junit:4.13.2",
       mvn"com.novocode:junit-interface:0.11",
       mvn"org.mockito:mockito-core:5.12.0",
-      mvn"io.vertx:vertx-unit:4.5.24"
+      mvn"io.vertx:vertx-unit:4.5.27"
     )
   }
 }

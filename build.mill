@@ -58,7 +58,10 @@ object Constants {
 
   // Jackson: Spark 3.5.3 bundles 2.15.2 at runtime via its classloader,
   // so the assembly version only matters for non-Spark processes (service, fetcher).
-  // Use 2.18.6 to fix GHSA-72hv-8253-57qq (async parser DoS).
+  // GHSA-72hv-8253-57qq (async parser DoS) is fixed in jackson-core 2.21.1+,
+  // but jackson-annotations / jackson-databind aren't published at 2.21.x on
+  // Maven Central yet (only 2.19.0 / 2.18.4). A unified jacksonVersion bump
+  // is blocked until the full 2.21.x train ships; see .grype.yaml ignore.
   val jacksonVersion = "2.18.6"
 
   // log4j-1.2-api is the Log4j 1.x bridge bundled with Spark; pin to fix GHSA-h383-gmxw-35v2.

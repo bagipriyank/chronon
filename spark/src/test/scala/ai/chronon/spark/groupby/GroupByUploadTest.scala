@@ -24,7 +24,7 @@ import ai.chronon.online.fetcher.Fetcher
 import ai.chronon.aggregator.windowing.{FiveMinuteResolution, SawtoothOnlineAggregator}
 import ai.chronon.online.serde.{AvroCodec, AvroConversions, SparkConversions}
 import ai.chronon.spark.Extensions.DataframeOps
-import ai.chronon.spark.GroupByUpload
+import ai.chronon.spark.{GroupByUpload, IonPathConfig}
 import ai.chronon.spark.catalog.TableUtils
 import ai.chronon.spark.submission.SparkSessionBuilder
 import ai.chronon.spark.utils.{DataFrameGen, MockApi, OnlineUtils, SparkTestBase}
@@ -96,6 +96,50 @@ class GroupByUploadTest extends SparkTestBase with Matchers {
         accuracy = Accuracy.TEMPORAL
       )
     GroupByUpload.run(groupByConf, endDs = yesterday)
+  }
+
+  // Regression: an ion upload with no input data must fail, not silently "succeed". uploadDf always
+  // carries the GroupByServingInfoKey meta row, so before the guard the ion writer reported rows=1
+  // and the no-data case passed (only caught on the parquet path). See GroupByUpload zero-row guard.
+  it should "fail an ion upload that produces zero rows" in {
+    val namespace = testNamespace("ion_zero_rows")
+    createDatabase(namespace)
+    tableUtils.sql(s"USE $namespace")
+
+    val eventsTable = "ion_zero_rows_events"
+    val eventSchema = List(
+      Column("user", StringType, 10),
+      Column("views", IntType, 10)
+    )
+    // Data lands on recent partitions; running the upload for an endDs far before any data makes the
+    // snapshot scan empty — mirrors the production "no input data for the requested date" case.
+    val eventDf = DataFrameGen.events(spark, eventSchema, count = 1000, partitions = 18)
+    eventDf.save(s"$namespace.$eventsTable")
+
+    val groupByConf =
+      Builders.GroupBy(
+        sources = Seq(Builders.Source.events(Builders.Query(), table = eventsTable)),
+        keyColumns = Seq("user"),
+        aggregations = Seq(Builders.Aggregation(Operation.SUM, "views", Seq(WindowUtils.Unbounded))),
+        metaData = Builders.MetaData(namespace = namespace, name = "ion_zero_rows_upload"),
+        accuracy = Accuracy.SNAPSHOT
+      )
+
+    val tmpDir = java.nio.file.Files.createTempDirectory("ion_zero_rows").toString
+    val prevFormat = spark.conf.getOption(IonPathConfig.UploadFormatKey)
+    val prevLocation = spark.conf.getOption(IonPathConfig.UploadLocationKey)
+    spark.conf.set(IonPathConfig.UploadFormatKey, "ion")
+    spark.conf.set(IonPathConfig.UploadLocationKey, s"file://$tmpDir")
+    try {
+      val ex = intercept[RuntimeException] {
+        GroupByUpload.run(groupByConf, endDs = "1970-01-01")
+      }
+      ex.getMessage should include("zero rows")
+    } finally {
+      prevFormat.fold(spark.conf.unset(IonPathConfig.UploadFormatKey))(spark.conf.set(IonPathConfig.UploadFormatKey, _))
+      prevLocation.fold(spark.conf.unset(IonPathConfig.UploadLocationKey))(
+        spark.conf.set(IonPathConfig.UploadLocationKey, _))
+    }
   }
 
   it should "struct support" in {

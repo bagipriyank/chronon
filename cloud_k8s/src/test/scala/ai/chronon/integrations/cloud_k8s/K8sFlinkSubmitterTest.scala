@@ -226,16 +226,34 @@ class K8sFlinkSubmitterTest extends AnyFlatSpec {
 
   // --- buildComponentSpec: podTemplateLabels ---
 
-  private def podMeta(submitter: K8sFlinkSubmitter): java.util.Map[String, Object] = {
-    val componentSpec = submitter.buildComponentSpec(
-      memory = "4G",
-      cpu = 1.0,
-      replicas = Some(1),
-      Collections.emptyList(),
-      Collections.emptyList(),
-      Collections.emptyList(),
-      Collections.emptyList()
-    )
+  private def podMeta(submitter: K8sFlinkSubmitter,
+                      labels: Map[String, String] = Map.empty): java.util.Map[String, Object] = {
+    // When labels is empty here, buildComponentSpec falls back to its default (the submitter's
+    // podTemplateLabels), which lets us test both the constructor-level labels and the
+    // per-call override path.
+    val componentSpec =
+      if (labels.isEmpty) {
+        submitter.buildComponentSpec(
+          memory = "4G",
+          cpu = 1.0,
+          replicas = Some(1),
+          Collections.emptyList(),
+          Collections.emptyList(),
+          Collections.emptyList(),
+          Collections.emptyList()
+        )
+      } else {
+        submitter.buildComponentSpec(
+          memory = "4G",
+          cpu = 1.0,
+          replicas = Some(1),
+          Collections.emptyList(),
+          Collections.emptyList(),
+          Collections.emptyList(),
+          Collections.emptyList(),
+          labels = labels
+        )
+      }
     componentSpec.get("podTemplate")
       .asInstanceOf[java.util.Map[String, Object]]
       .get("metadata")
@@ -264,6 +282,96 @@ class K8sFlinkSubmitterTest extends AnyFlatSpec {
     val meta = podMeta(submitterWithExtra(podLabels = Map("some-label" -> "val")))
     val annotations = meta.get("annotations").asInstanceOf[java.util.Map[String, String]]
     assertEquals("true", annotations.get("prometheus.io/scrape"))
+  }
+
+  it should "use the labels override when provided, ignoring constructor podTemplateLabels" in {
+    val submitter = submitterWithExtra(podLabels = Map("constructor-label" -> "ignored"))
+    val meta: java.util.Map[String, Object] = podMeta(submitter, Map("override-label" -> "wins"))
+    val labels = meta.get("labels").asInstanceOf[java.util.Map[String, String]]
+    assertEquals("wins", labels.get("override-label"))
+    assertNull(labels.get("constructor-label"))
+  }
+
+  // --- buildEffectivePodLabels ---
+
+  "buildEffectivePodLabels" should "preserve unrelated constructor labels when groupByName is None" in {
+    val submitter = submitterWithExtra(podLabels = Map("foo" -> "bar"))
+    assertEquals(Map("foo" -> "bar"), submitter.buildEffectivePodLabels(None))
+  }
+
+  it should "merge the GroupBy label onto constructor labels when groupByName is provided" in {
+    val submitter = submitterWithExtra(podLabels = Map("foo" -> "bar"))
+    val labels = submitter.buildEffectivePodLabels(Some("ranking.user.x.v1__2"))
+    assertEquals("bar", labels("foo"))
+    assertEquals("ranking_user_x_v1__2", labels(K8sFlinkSubmitter.JobNamePodLabel))
+  }
+
+  it should "preserve the compile-version suffix in the label value" in {
+    val submitter = submitterWithExtra()
+    val labels = submitter.buildEffectivePodLabels(Some("a.b.v1__7"))
+    assertEquals("a_b_v1__7", labels(K8sFlinkSubmitter.JobNamePodLabel))
+  }
+
+  it should "let the GroupBy label win when constructor labels already have the same key" in {
+    val submitter = submitterWithExtra(
+      podLabels = Map(K8sFlinkSubmitter.JobNamePodLabel -> "stale-value")
+    )
+    val labels = submitter.buildEffectivePodLabels(Some("fresh.v1"))
+    assertEquals("fresh_v1", labels(K8sFlinkSubmitter.JobNamePodLabel))
+  }
+
+  // --- sanitizeLabelValue ---
+
+  "sanitizeLabelValue" should "leave an already-strict name unchanged" in {
+    assertEquals("a_b_v1__2", K8sFlinkSubmitter.sanitizeLabelValue("a_b_v1__2"))
+  }
+
+  it should "replace dots with underscores so the value survives Prometheus filtering" in {
+    assertEquals("a_b_v1__2", K8sFlinkSubmitter.sanitizeLabelValue("a.b.v1__2"))
+  }
+
+  it should "replace any other disallowed characters with underscore" in {
+    assertEquals("a_b_c", K8sFlinkSubmitter.sanitizeLabelValue("a/b-c"))
+  }
+
+  it should "strip leading and trailing underscores after sanitization" in {
+    assertEquals("a_b", K8sFlinkSubmitter.sanitizeLabelValue("..a.b--"))
+  }
+
+  it should "truncate names longer than 63 chars and append a hash for distinguishability" in {
+    val long = "a" * 80
+    val sanitized = K8sFlinkSubmitter.sanitizeLabelValue(long)
+    assertTrue(s"length should be <= 63, got ${sanitized.length}", sanitized.length <= 63)
+    assertTrue(s"should contain hash separator, got '$sanitized'", sanitized.contains("_"))
+  }
+
+  it should "produce different values for two distinct long names that share a prefix" in {
+    val a = "team.entity.subentity." + ("x" * 60) + ".groupbyA.v1__1"
+    val b = "team.entity.subentity." + ("x" * 60) + ".groupbyB.v1__1"
+    val sa = K8sFlinkSubmitter.sanitizeLabelValue(a)
+    val sb = K8sFlinkSubmitter.sanitizeLabelValue(b)
+    assertTrue(s"sanitized values should differ, got '$sa' and '$sb'", sa != sb)
+    assertTrue(sa.length <= 63 && sb.length <= 63)
+  }
+
+  it should "throw when input is empty or has no alphanumeric characters" in {
+    assertThrows[IllegalArgumentException](K8sFlinkSubmitter.sanitizeLabelValue(""))
+    assertThrows[IllegalArgumentException](K8sFlinkSubmitter.sanitizeLabelValue("---"))
+  }
+
+  it should "produce values that contain only [A-Za-z0-9_] (Prometheus-safe intersection)" in {
+    val sanitized = K8sFlinkSubmitter.sanitizeLabelValue("ranking.user.last_n.v1__2")
+    assertTrue(s"value should match strict pattern, got '$sanitized'", sanitized.matches("[A-Za-z0-9_]+"))
+  }
+
+  // --- buildEffectivePodLabels: sanitization ---
+
+  it should "sanitize the GroupBy label value before merging" in {
+    val submitter = submitterWithExtra()
+    val long = "team.entity." + ("x" * 80)
+    val labels = submitter.buildEffectivePodLabels(Some(long))
+    val value = labels(K8sFlinkSubmitter.JobNamePodLabel)
+    assertTrue(value.length <= 63)
   }
 
   // --- flinkEnvVars injection into JM/TM containers ---

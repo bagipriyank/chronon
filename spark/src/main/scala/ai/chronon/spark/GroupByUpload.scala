@@ -496,6 +496,13 @@ object GroupByUpload {
 
     logger.info(s"GroupBy upload with upload format: $uploadFormat")
 
+    // metaDf adds a single GroupByServingInfoKey row that is always unioned into uploadDf, so the
+    // written output is never empty on its own. Guard on kvDf (the actual upload rows) up front so an
+    // upload with no data fails uniformly across upload formats, before anything is written.
+    if (kvDf.isEmpty) {
+      throw new RuntimeException("GroupBy upload resulted in zero rows.")
+    }
+
     if (uploadFormat == "ion") {
       val rootPath = sparkConf.getOption(IonPathConfig.UploadLocationKey)
       val ionDf = uploadDf.withColumn(partitionCol, to_date(col(partitionCol)))
@@ -514,22 +521,17 @@ object GroupByUpload {
                     groupByConf.metaData.tableProps,
                     partitionColumns = List(partitionCol))
 
-      val kvDfReloaded = tableUtils
+      // Metrics are summed from the persisted table with the serving-info meta row excluded; the
+      // guard above guarantees there is real data to summarize (a global aggregation returns one row).
+      val metricRow = tableUtils
         .loadTable(groupByConf.metaData.uploadTable)
         .where(not(col("key_json").eqNullSafe(Constants.GroupByServingInfoKey)))
+        .selectExpr("sum(bit_length(key_bytes))/8", "sum(bit_length(value_bytes))/8", "count(*)")
+        .collect()
 
-      val metricRow =
-        kvDfReloaded
-          .selectExpr("sum(bit_length(key_bytes))/8", "sum(bit_length(value_bytes))/8", "count(*)")
-          .collect()
-
-      if (metricRow.length > 0 && metricRow(0).getLong(2) > 0) {
-        context.gauge(Metrics.Name.KeyBytes, metricRow(0).getDouble(0).toLong)
-        context.gauge(Metrics.Name.ValueBytes, metricRow(0).getDouble(1).toLong)
-        context.gauge(Metrics.Name.RowCount, metricRow(0).getLong(2))
-      } else {
-        throw new RuntimeException("GroupBy upload resulted in zero rows.")
-      }
+      context.gauge(Metrics.Name.KeyBytes, metricRow(0).getDouble(0).toLong)
+      context.gauge(Metrics.Name.ValueBytes, metricRow(0).getDouble(1).toLong)
+      context.gauge(Metrics.Name.RowCount, metricRow(0).getLong(2))
     }
 
     val jobDuration = (System.currentTimeMillis() - startTs) / 1000
