@@ -452,9 +452,9 @@ object GroupByUpload {
   def run(groupByConf: api.GroupBy,
           endDs: String,
           tableUtilsOpt: Option[TableUtils] = None,
-          outputLocation: Option[String] = None,
           showDf: Boolean = false,
-          jsonPercent: Int = 1): Unit = {
+          jsonPercent: Int = 1,
+          outputLocation: Option[String] = None): Unit = {
     import ai.chronon.spark.submission.SparkSessionBuilder
     val tableUtils: TableUtils =
       tableUtilsOpt.getOrElse(

@@ -32,9 +32,20 @@ trait Format {
         (hashedParts.map(QuotingUtils.quoteIdentifier).mkString("."), tableName)
       case None => (tableName, tableName)
     }
+    // Parse the identifier here (we have a SparkSession) so the LOCATION subdir uses the real
+    // leaf segment even for dotted, backtick-quoted names; CreationUtils can't parse on its own.
+    val tableLocationLeaf =
+      if (outputLocation.exists(_.trim.nonEmpty)) Format.parseIdentifier(creationName).lastOption
+      else None
     sparkSession.sql(
       CreationUtils
-        .createTableSql(creationName, schema, partitionColumns, providedProperties, tableTypeString, outputLocation))
+        .createTableSql(creationName,
+                        schema,
+                        partitionColumns,
+                        providedProperties,
+                        tableTypeString,
+                        outputLocation,
+                        tableLocationLeaf))
     if (semanticHash.isDefined) {
       try {
         sparkSession.sql(Format.renameTableSql(creationName, tableName))

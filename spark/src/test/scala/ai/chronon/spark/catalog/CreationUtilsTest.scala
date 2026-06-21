@@ -61,6 +61,21 @@ class CreationUtilsTest extends AnyFlatSpec with Matchers {
     sql should include("LOCATION 's3://bucket/wh/tbl/'")
   }
 
+  it should "use the pre-parsed leaf for the LOCATION subdir when one is supplied" in {
+    // Format.createTable passes the leaf parsed via Format.parseIdentifier so dotted,
+    // backtick-quoted segments (which the naive split would corrupt) resolve correctly.
+    val sql =
+      CreationUtils.createTableSql("`db`.`a.b`",
+                                   schema,
+                                   partitionColumns,
+                                   Map.empty,
+                                   "iceberg",
+                                   Some("s3://bucket/wh"),
+                                   tableLocationLeaf = Some("a.b"))
+
+    sql should include("LOCATION 's3://bucket/wh/a.b/'")
+  }
+
   it should "treat an empty-string outputLocation as managed (no EXTERNAL/LOCATION)" in {
     val sql = CreationUtils.createTableSql("db.tbl", schema, partitionColumns, Map.empty, "iceberg", Some(""))
 

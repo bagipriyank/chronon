@@ -21,7 +21,8 @@ object CreationUtils {
                      partitionColumns: List[String],
                      tableProperties: Map[String, String],
                      tableTypeString: String,
-                     outputLocation: Option[String] = None): String = {
+                     outputLocation: Option[String] = None,
+                     tableLocationLeaf: Option[String] = None): String = {
 
     require(
       tableTypeString.isEmpty || ALLOWED_TABLE_TYPES.contains(tableTypeString.toLowerCase),
@@ -71,11 +72,15 @@ object CreationUtils {
     val cloudPathLocation = if (outputLocation.exists(_.trim.nonEmpty)) {
       val location = outputLocation.get
       val cloudPath = if (location.endsWith("/")) location else location + "/"
-      // The table's own name (last dot-separated segment, with surrounding backticks
-      // stripped) becomes the location subdir. Assumes a simple db.table identifier;
-      // a literal dot inside a backtick-quoted segment (`db`.`a.b`) is not supported.
-      val lastSegment = if (tableName.contains(".")) tableName.split("\\.").last else tableName
-      val finalTableName = lastSegment.stripPrefix("`").stripSuffix("`")
+      // The table's own name (the leaf segment of the identifier) becomes the location subdir.
+      // Callers with a SparkSession should pass `tableLocationLeaf` (parsed via
+      // Format.parseIdentifier) so dotted, backtick-quoted segments (`db`.`a.b`) resolve
+      // correctly. The naive split fallback only handles simple db.table identifiers and is
+      // used when no pre-parsed leaf is supplied (e.g. unit tests without a session).
+      val finalTableName = tableLocationLeaf.getOrElse {
+        val lastSegment = if (tableName.contains(".")) tableName.split("\\.").last else tableName
+        lastSegment.stripPrefix("`").stripSuffix("`")
+      }
       s"LOCATION '${escapeSqlStringValue(cloudPath + finalTableName)}/'"
     } else {
       ""
