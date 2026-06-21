@@ -4,7 +4,7 @@ import org.apache.spark.sql.types.StructType
 
 object CreationUtils {
 
-  private val ALLOWED_TABLE_TYPES = List("iceberg", "delta", "hive", "parquet", "hudi")
+  val ALLOWED_TABLE_TYPES = List("iceberg", "delta", "hive", "parquet", "hudi")
 
   /** Escapes a string value for use in SQL by doubling single quotes.
     * This follows the SQL standard for escaping string literals.
@@ -28,20 +28,30 @@ object CreationUtils {
       s"Invalid table type: ${tableTypeString}. Must be empty OR one of: ${ALLOWED_TABLE_TYPES}"
     )
 
-    val tableType = outputLocation match {
-      case Some(s) if s.nonEmpty => "EXTERNAL"
-      case _                     => ""
-    }
+    // A provider-less CREATE (no USING clause) is materialized as Iceberg under an Iceberg
+    // SparkSessionCatalog, which treats a null provider as its own. For the Hive/parquet write
+    // path (tableTypeString empty) with an explicit output location we therefore name a concrete
+    // non-Iceberg provider so the catalog delegates the create to the session (Hive) catalog and
+    // lands a real parquet table at that location. A provider plus LOCATION is already
+    // external/unmanaged, so no EXTERNAL keyword is needed (and `EXTERNAL ... USING` is rejected
+    // by Spark anyway, SPARK-30436). Without an output location we keep the original provider-less
+    // managed create, preserving prior behavior for callers that don't set --output-location.
+    val hasLocation = outputLocation.exists(_.trim.nonEmpty)
+    val effectiveProvider =
+      if (tableTypeString.nonEmpty) tableTypeString
+      else if (hasLocation) "parquet"
+      else ""
+    val usingFragment = if (effectiveProvider.isEmpty) "" else s"USING $effectiveProvider"
 
     val noPartitions = StructType(
       schema
         .filterNot(field => partitionColumns.contains(field.name)))
 
     val createFragment =
-      s"""CREATE $tableType TABLE IF NOT EXISTS $tableName (
+      s"""CREATE TABLE IF NOT EXISTS $tableName (
          |    ${noPartitions.toDDL}
          |)
-         |${if (tableTypeString.isEmpty) "" else f"USING ${tableTypeString}"}
+         |${usingFragment}
          |""".stripMargin
 
     val partitionFragment = if (partitionColumns != null && partitionColumns.nonEmpty) {
@@ -58,11 +68,12 @@ object CreationUtils {
       ""
     }
 
-    // write in the cloud path location if provided
     val cloudPathLocation = if (outputLocation.exists(_.trim.nonEmpty)) {
       val location = outputLocation.get
       val cloudPath = if (location.endsWith("/")) location else location + "/"
-      // Strip backticks from the last identifier segment to handle quoted names safely
+      // The table's own name (last dot-separated segment, with surrounding backticks
+      // stripped) becomes the location subdir. Assumes a simple db.table identifier;
+      // a literal dot inside a backtick-quoted segment (`db`.`a.b`) is not supported.
       val lastSegment = if (tableName.contains(".")) tableName.split("\\.").last else tableName
       val finalTableName = lastSegment.stripPrefix("`").stripSuffix("`")
       s"LOCATION '${escapeSqlStringValue(cloudPath + finalTableName)}/'"

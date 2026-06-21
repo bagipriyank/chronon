@@ -6,6 +6,7 @@ import ai.chronon.api.LongType
 import ai.chronon.api.StringType
 import ai.chronon.api.StructField
 import ai.chronon.api.StructType
+import ai.chronon.spark.Extensions._
 import ai.chronon.spark.catalog.IncompatibleSchemaException
 import ai.chronon.spark.catalog.TableUtils
 import ai.chronon.spark.catalog.{DefaultFormatProvider, FormatProvider}
@@ -16,6 +17,7 @@ import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.functions.col
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -81,6 +83,42 @@ class TableUtilsFormatTest extends AnyFlatSpec {
       )
     )
     testInsertPartitions(spark, tableUtils, tableName, format, df1, df2, ds1 = "2022-10-01", ds2 = "2022-10-02")
+  }
+
+  // Exercises the shared write sink that every output-writing Driver mode funnels through
+  // (df.save -> TableUtils.insertPartitions -> Format.createTable -> CreationUtils.createTableSql).
+  // Validates end-to-end that an explicit --output-location lands the table at that path and the
+  // data round-trips, so the per-mode forwarding (group-by/join/staging-query/upload) is
+  // meaningful rather than silently dropped.
+  it should "create the table at an explicit outputLocation and round-trip the data" in {
+    val dbName = s"db_${System.currentTimeMillis()}"
+    val tableName = s"$dbName.test_output_location_$format"
+    spark.sql(s"CREATE DATABASE IF NOT EXISTS $dbName")
+
+    val outputLocation = java.nio.file.Files.createTempDirectory("chronon-output-location-test").toString
+
+    val df = makeDf(
+      spark,
+      StructType(
+        tableName,
+        Array(
+          StructField("long_field", LongType),
+          StructField("int_field", IntType),
+          StructField("ds", StringType)
+        )
+      ),
+      List(Row(1L, 2, "2022-10-01"))
+    )
+
+    df.save(tableName, outputLocation = Some(outputLocation))
+
+    val tbl = tableName.split("\\.")
+    val meta = spark.sessionState.catalog.getTableMetadata(TableIdentifier(tbl(1), Some(tbl(0))))
+    assertTrue(
+      s"table location ${meta.location} should be under the requested outputLocation $outputLocation",
+      meta.location.toString.contains(outputLocation)
+    )
+    assertEquals(1L, spark.table(tableName).count())
   }
 
   it should "test insertion of partitioned data and removal of columns" in {
