@@ -79,6 +79,13 @@ object CreationUtils {
       // correctly. The naive split fallback only handles simple db.table identifiers and is
       // used when no pre-parsed leaf is supplied (e.g. unit tests without a session).
       val finalTableName = tableLocationLeaf.getOrElse {
+        // A dot inside a backtick-quoted segment can't be disambiguated from a namespace
+        // separator by a naive split, so fail loudly instead of writing a silently wrong
+        // LOCATION. Such callers must supply a pre-parsed tableLocationLeaf.
+        require(
+          !"`[^`]*`".r.findAllIn(tableName).exists(_.contains(".")),
+          s"tableLocationLeaf must be supplied for '$tableName' (dot inside a quoted segment) when outputLocation is set"
+        )
         val lastSegment = if (tableName.contains(".")) tableName.split("\\.").last else tableName
         lastSegment.stripPrefix("`").stripSuffix("`")
       }

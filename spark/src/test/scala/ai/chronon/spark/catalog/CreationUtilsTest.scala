@@ -76,6 +76,13 @@ class CreationUtilsTest extends AnyFlatSpec with Matchers {
     sql should include("LOCATION 's3://bucket/wh/a.b/'")
   }
 
+  it should "fail loudly when a dotted quoted identifier has no pre-parsed leaf and a location is set" in {
+    // Without tableLocationLeaf the naive split can't tell a quoted dot from a namespace
+    // separator, so it must refuse rather than emit a silently wrong LOCATION path.
+    an[IllegalArgumentException] should be thrownBy
+      CreationUtils.createTableSql("`db`.`a.b`", schema, partitionColumns, Map.empty, "iceberg", Some("s3://bucket/wh"))
+  }
+
   it should "treat an empty-string outputLocation as managed (no EXTERNAL/LOCATION)" in {
     val sql = CreationUtils.createTableSql("db.tbl", schema, partitionColumns, Map.empty, "iceberg", Some(""))
 
