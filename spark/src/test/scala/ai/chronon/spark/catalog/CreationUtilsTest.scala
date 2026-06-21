@@ -118,8 +118,9 @@ class CreationUtilsTest extends AnyFlatSpec with Matchers {
     }
   }
 
-  // The empty tableTypeString is the Hive default-format path: it is the ONLY case that may emit
-  // EXTERNAL, and it must never emit a USING clause.
+  // The empty tableTypeString is the Hive default-format path. Without an output location it must
+  // stay a provider-less managed CREATE (no USING) to preserve the original behavior for callers
+  // that don't set --output-location; the USING-parquet-with-LOCATION variant is covered above.
   it should "emit a managed Hive CREATE TABLE (no USING/EXTERNAL/LOCATION) for empty type without a location" in {
     val sql = CreationUtils.createTableSql("db.tbl", schema, partitionColumns, Map.empty, "", None)
 
