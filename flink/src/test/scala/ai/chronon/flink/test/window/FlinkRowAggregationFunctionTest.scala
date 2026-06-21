@@ -10,6 +10,7 @@ import org.scalatest.matchers.should.Matchers.convertToAnyShouldWrapper
 
 import scala.util.Failure
 import scala.util.Try
+import ai.chronon.flink.test.FlinkTestUtils
 
 class FlinkRowAggregationFunctionTest extends AnyFlatSpec {
   private val aggregations: Seq[Aggregation] = Seq(
@@ -262,6 +263,126 @@ class FlinkRowAggregationFunctionTest extends AnyFlatSpec {
     finalResult.zip(expectedResult).foreach { case (computed, expected) =>
       computed shouldBe expected
     }
+  }
+
+  // ---- Mutation (CDC / EntitySource) tests ----
+
+  // Schema for entity mutation tests: matches makeEntityGroupBy — includes is_before and mutation_ts
+  private val mutationSchema = List(
+    Constants.TimeColumn       -> LongType,
+    "double_val"               -> DoubleType,
+    Constants.MutationTimeColumn -> LongType,
+    Constants.ReversalColumn   -> BooleanType
+  )
+
+  private def makeMutationGroupBy = FlinkTestUtils.makeEntityGroupBy(Seq("id"))
+
+  private def mutationRow(ts: Long, doubleVal: Double, mutationTs: Long, isBefore: Boolean): ProjectedEvent =
+    ProjectedEvent(
+      Map(
+        Constants.TimeColumn       -> ts,
+        "double_val"               -> doubleVal,
+        Constants.MutationTimeColumn -> mutationTs,
+        Constants.ReversalColumn   -> isBefore
+      ),
+      0L
+    )
+
+  private def finalizeIr(groupBy: GroupBy, ir: Array[Any]): Array[Any] = {
+    val tileCodec = new TileCodec(groupBy, mutationSchema)
+    tileCodec.windowedRowAggregator.finalize(tileCodec.expandWindowedTileIr(ir))
+  }
+
+  it should "insert (isBefore=false) adds value to IR" in {
+    val groupBy = makeMutationGroupBy
+    val agg = new FlinkRowAggregationFunction(groupBy, mutationSchema)
+    var acc = agg.createAccumulator()
+    acc = agg.add(mutationRow(1L, 10.0, 2L, isBefore = false), acc)
+
+    val result = finalizeIr(groupBy, agg.getResult(acc).ir)
+    result(0).asInstanceOf[Double] shouldBe 10.0
+  }
+
+  it should "delete (isBefore=true) subtracts value from IR" in {
+    val groupBy = makeMutationGroupBy
+    val agg = new FlinkRowAggregationFunction(groupBy, mutationSchema)
+    var acc = agg.createAccumulator()
+    // Create then delete the same value
+    acc = agg.add(mutationRow(1L, 10.0, 2L, isBefore = false), acc)
+    acc = agg.add(mutationRow(1L, 10.0, 3L, isBefore = true), acc)
+
+    val result = finalizeIr(groupBy, agg.getResult(acc).ir)
+    result(0).asInstanceOf[Double] shouldBe 0.0
+  }
+
+  it should "update (before then after) produces net after value" in {
+    val groupBy = makeMutationGroupBy
+    val agg = new FlinkRowAggregationFunction(groupBy, mutationSchema)
+    var acc = agg.createAccumulator()
+    // Initial create
+    acc = agg.add(mutationRow(1L, 10.0, 2L, isBefore = false), acc)
+    // Update: subtract old (before), add new (after)
+    acc = agg.add(mutationRow(1L, 10.0, 3L, isBefore = true), acc)
+    acc = agg.add(mutationRow(1L, 25.0, 3L, isBefore = false), acc)
+
+    val result = finalizeIr(groupBy, agg.getResult(acc).ir)
+    result(0).asInstanceOf[Double] shouldBe 25.0
+  }
+
+  it should "multiple updates produce correct net IR" in {
+    val groupBy = makeMutationGroupBy
+    val agg = new FlinkRowAggregationFunction(groupBy, mutationSchema)
+    var acc = agg.createAccumulator()
+    acc = agg.add(mutationRow(1L, 5.0,  2L, isBefore = false), acc) // create +5
+    acc = agg.add(mutationRow(1L, 5.0,  3L, isBefore = true),  acc) // update before -5
+    acc = agg.add(mutationRow(1L, 15.0, 3L, isBefore = false), acc) // update after +15
+    acc = agg.add(mutationRow(1L, 15.0, 4L, isBefore = true),  acc) // update before -15
+    acc = agg.add(mutationRow(1L, 30.0, 4L, isBefore = false), acc) // update after +30
+
+    val result = finalizeIr(groupBy, agg.getResult(acc).ir)
+    result(0).asInstanceOf[Double] shouldBe 30.0
+  }
+
+  it should "throw at construction when is_before column is absent for mutation source" in {
+    val groupBy = makeMutationGroupBy
+    // Schema missing ReversalColumn — should fail fast at construction
+    val schemaWithoutReversal = List(
+      Constants.TimeColumn         -> LongType,
+      "double_val"                 -> DoubleType,
+      Constants.MutationTimeColumn -> LongType
+      // ReversalColumn intentionally omitted
+    )
+    val ex = intercept[IllegalArgumentException] {
+      new FlinkRowAggregationFunction(groupBy, schemaWithoutReversal)
+    }
+    assert(ex.getMessage.contains("reversal_column"))
+  }
+
+  it should "not treat event source as mutation even if schema has is_before" in {
+    // Event-source GroupBy (no mutationTopic) → isMutation=false → isBefore column ignored
+    val eventGroupBy = FlinkTestUtils.makeGroupBy(Seq("id"))
+    val schemaWithReversal = List(
+      Constants.TimeColumn     -> LongType,
+      "double_val"             -> DoubleType,
+      Constants.ReversalColumn -> BooleanType
+    )
+    val agg = new FlinkRowAggregationFunction(eventGroupBy, schemaWithReversal)
+    var acc = agg.createAccumulator()
+    // Add a row with isBefore=true — for event source, this should be treated as an insert
+    acc = agg.add(
+      ProjectedEvent(
+        Map(
+          Constants.TimeColumn     -> 1L,
+          "double_val"             -> 10.0,
+          Constants.ReversalColumn -> true
+        ),
+        0L
+      ),
+      acc
+    )
+    val result = finalizeIr(eventGroupBy, agg.getResult(acc).ir)
+    // For event sources, isBefore is ignored — value should be added, not subtracted
+    result(0).asInstanceOf[Double] shouldBe 10.0
   }
 
   case class Struct(uniqueId: Long, sortKey: String, payload: String)

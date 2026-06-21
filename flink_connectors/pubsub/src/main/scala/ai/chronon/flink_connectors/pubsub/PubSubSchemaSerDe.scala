@@ -2,7 +2,15 @@ package ai.chronon.flink_connectors.pubsub
 
 import ai.chronon.api.StructType
 import ai.chronon.online.TopicInfo
-import ai.chronon.online.serde.{AvroCodec, AvroSerDe, Mutation, ProtobufSerDe, SerDe}
+import ai.chronon.online.serde.{
+  AvroCodec,
+  AvroSerDe,
+  DebeziumAvroSerDe,
+  DebeziumMutationMapper,
+  Mutation,
+  ProtobufSerDe,
+  SerDe
+}
 import com.google.api.gax.rpc.NotFoundException
 import com.google.cloud.pubsub.v1.SchemaServiceClient
 import com.google.pubsub.v1.SchemaName
@@ -23,6 +31,9 @@ class PubSubSchemaSerDe(topicInfo: TopicInfo) extends SerDe {
 
   private val proto3DefaultAsNull: Boolean =
     topicInfo.params.getOrElse(Proto3DefaultAsNullKey, "false").toBoolean
+
+  private val isDebezium: Boolean =
+    topicInfo.params.getOrElse(DebeziumMutationMapper.DebeziumKey, "false").toBoolean
 
   protected[flink_connectors] def buildPubsubSchemaClient(): SchemaServiceClient = {
     SchemaServiceClient.create()
@@ -50,8 +61,10 @@ class PubSubSchemaSerDe(topicInfo: TopicInfo) extends SerDe {
     schema.getType match {
       case com.google.pubsub.v1.Schema.Type.AVRO =>
         val avroSchema = AvroCodec.of(schema.getDefinition).schema
-        new AvroSerDe(avroSchema)
+        if (isDebezium) new DebeziumAvroSerDe(avroSchema) else new AvroSerDe(avroSchema)
       case com.google.pubsub.v1.Schema.Type.PROTOCOL_BUFFER =>
+        if (isDebezium)
+          throw new IllegalArgumentException("debezium is not supported with Protobuf schemas. Use Avro.")
         val protobufSchema = new ProtobufSchema(schema.getDefinition)
         val descriptor = protobufSchema.toDescriptor()
         new ProtobufSerDe(descriptor, proto3DefaultAsNull)

@@ -16,3 +16,6 @@ sqlglot
 # Schedule validation
 croniter
 urllib3==2.6.3
+# Databricks SQL warehouse client (used by `zipline compare-tables` to fetch
+# the metrics summary after job completion)
+databricks-sql-connector

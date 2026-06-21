@@ -78,6 +78,51 @@ def _app_images(cloud, release):
     return images
 
 
+def _get_current_kube_context() -> str:
+    """Return the active kubectl context, or exit with a helpful message if
+    kubectl is missing or unconfigured. Read once at command start so the
+    detected context is what gets shown in the confirmation prompt; the
+    actual kubectl calls inherit the ambient context as usual."""
+    if not shutil.which("kubectl"):
+        console.print(
+            "[red]kubectl not found.[/red]\n"
+            "Install kubectl (https://kubernetes.io/docs/tasks/tools/) and retry."
+        )
+        raise SystemExit(1)
+    result = subprocess.run(
+        ["kubectl", "config", "current-context"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        console.print(
+            "[red]No active kubectl context.[/red]\n"
+            "Configure one and retry:\n"
+            "  aws eks update-kubeconfig --name <cluster-name> --region <region>"
+        )
+        raise SystemExit(1)
+    return result.stdout.strip()
+
+
+def _confirm_kube_context(context: str, assume_yes: bool = False) -> None:
+    """Show the detected kubectl context and prompt for confirmation. Aborts
+    on No. Skipped when `assume_yes` is true (for CI / scripted use)."""
+    console.print(f"About to run against kubectl context: [bold]{context}[/bold]")
+    if assume_yes:
+        return
+    if not click.confirm("Proceed?", default=False):
+        console.print("[yellow]Aborted by user.[/yellow]")
+        raise SystemExit(1)
+
+
+def assume_yes_option(func):
+    return click.option(
+        "-y", "--yes", "assume_yes",
+        is_flag=True,
+        default=False,
+        help="Skip the kubectl-context confirmation prompt. Use for scripts/CI.",
+    )(func)
+
+
 # EKS service → (deployment_name, container_name, image_repo_template)
 _EKS_SERVICES = {
     "hub": ("zipline-orchestration-hub", "orchestration-hub", "ziplineai/hub-{cloud}"),
@@ -993,7 +1038,8 @@ def upgrade():
     default=None,
     help="Zipline release to upgrade to (e.g. 1.4.2). Defaults to the installed zipline-ai package version.",
 )
-def control_plane(cloud, release):
+@assume_yes_option
+def control_plane(cloud, release, assume_yes):
     """Upgrade running EKS service deployments to a given release.
 
     CLOUD is the cloud provider variant (gcp, aws, or azure).
@@ -1009,6 +1055,11 @@ def control_plane(cloud, release):
             console.print("[red]Could not detect installed zipline version. Please specify --release.[/red]")
             raise SystemExit(1)
         console.print(f"Using release [bold]{release}[/bold]")
+
+    # Detect the active kubectl context after input validation passes — we
+    # don't want a kubectl-not-found error to mask an obvious bad arg.
+    context = _get_current_kube_context()
+    _confirm_kube_context(context, assume_yes=assume_yes)
 
     _upgrade_eks_services(cloud, release)
 
@@ -1106,11 +1157,14 @@ def hub_health(hub_url, expected_version):
     show_default=True,
     help="Cloud provider variant.",
 )
-def streaming_health(cloud):
+@assume_yes_option
+def streaming_health(cloud, assume_yes):
     """Check that the Flink streaming infrastructure is correctly configured.
 
     Requires kubectl to be installed and configured with access to the cluster.
     """
+    context = _get_current_kube_context()
+    _confirm_kube_context(context, assume_yes=assume_yes)
     console.print("[bold]Running Kubernetes infrastructure checks...[/bold]")
     results = run_infra_checks(cloud=cloud)
     print_check_table("Zipline Streaming Infrastructure Diagnostics", results)

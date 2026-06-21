@@ -22,6 +22,11 @@ from datetime import datetime
 
 import click
 
+from ai.chronon.cli.options import (
+    CHRONON_REPO_PATH_ENVVAR,
+    CHRONON_ROOT_ENVVAR,
+    repo_root_option,
+)
 from ai.chronon.repo.aws import (
     ZIPLINE_AWS_JAR_DEFAULT,
     ZIPLINE_AWS_ONLINE_CLASS_DEFAULT,
@@ -58,7 +63,9 @@ from ai.chronon.repo.utils import get_environ_arg, resolve_conf, set_runtime_env
 # TODO: @davidhan - we should move these to all be in the defaults of the choice args
 def set_defaults(ctx):
     """Set default values based on environment."""
-    chronon_repo_path = os.environ.get("CHRONON_REPO_PATH", ".")
+    chronon_repo_path = os.environ.get(CHRONON_ROOT_ENVVAR) or os.environ.get(
+        CHRONON_REPO_PATH_ENVVAR, "."
+    )
     today = datetime.today().strftime("%Y-%m-%d")
 
     obj = ctx.obj if ctx.obj is not None else dict()
@@ -160,7 +167,10 @@ def validate_additional_jars(ctx, param, value):
     help="break down the backfill range into this number of tasks in parallel. "
     "Please use it along with --start-ds and --end-ds and only in manual mode",
 )
-@click.option("-r", "--repo", help="Path to chronon repo", default=".", show_default=True)
+@repo_root_option(
+    help="Path to chronon repo",
+    envvars=(CHRONON_ROOT_ENVVAR, CHRONON_REPO_PATH_ENVVAR),
+)
 @click.option(
     "--online-jar",
     help="Jar containing Online KvStore & Deserializer Impl. "

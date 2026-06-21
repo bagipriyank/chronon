@@ -1,6 +1,6 @@
 package ai.chronon.spark.upload
 
-import ai.chronon.spark.IonWriter
+import ai.chronon.spark.{IonPathConfig, IonWriter}
 import ai.chronon.spark.utils.SparkTestBase
 import com.amazon.ion.system.IonSystemBuilder
 import com.amazon.ion.{IonBlob, IonDecimal, IonStruct}
@@ -115,6 +115,43 @@ class IonWriterTest extends SparkTestBase with Matchers {
     partitionPath.toString should include(s"ds=$partitionValue")
     val partitionDir = new File(partitionPath.toUri)
     partitionDir.listFiles().filter(_.getName.endsWith(".ion")) should not be empty
+  }
+
+  it should "honor configured ion writer partitions" in {
+    val partitionValue = "2025-10-19"
+    val dataSetName = "ion-output-partitions"
+    val rootPath = Some(new File(tmpDir, "partition-root").toURI.toString)
+
+    val schema = StructType(
+      Seq(
+        StructField("key_bytes", BinaryType, nullable = true),
+        StructField("value_bytes", BinaryType, nullable = true),
+        StructField("key_json", StringType, nullable = true),
+        StructField("value_json", StringType, nullable = true),
+        StructField("ds", DateType, nullable = false)
+      )
+    )
+
+    val rows = (0 until 30).map { idx =>
+      Row(s"k$idx".getBytes("UTF-8"),
+          s"v$idx".getBytes("UTF-8"),
+          s"k$idx-json",
+          s"""{"v":"$idx"}""",
+          LocalDate.parse(partitionValue))
+    }
+    val df = spark.createDataFrame(spark.sparkContext.parallelize(rows, numSlices = 8), schema)
+
+    spark.conf.set(IonPathConfig.IonWriterPartitionsKey, "3")
+    try {
+      val result = IonWriter.write(df, dataSetName, "ds", partitionValue, rootPath)
+      result.rowCount shouldBe rows.size
+
+      val partitionPath = IonWriter.resolvePartitionPath(dataSetName, "ds", partitionValue, rootPath)
+      val partitionDir = new File(partitionPath.toUri)
+      partitionDir.listFiles().filter(_.getName.endsWith(".ion")).length shouldBe 3
+    } finally {
+      spark.conf.unset(IonPathConfig.IonWriterPartitionsKey)
+    }
   }
 
   it should "validate root path with valid schemes" in {

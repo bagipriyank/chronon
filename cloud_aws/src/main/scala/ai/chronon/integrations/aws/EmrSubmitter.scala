@@ -526,6 +526,8 @@ class EmrSubmitter(customerId: String,
           .map(EmrServerlessSubmitter.parseNodeSelector)
           .getOrElse(Map.empty)
 
+        val groupByName = JobSubmitter.getArgValue(args.toArray, GroupByNameArgKeyword).filter(_.nonEmpty)
+
         val deploymentName = eksFlinkSubmitter
           .getOrElse(
             throw new RuntimeException("K8sFlinkSubmitter is required for Flink jobs")
@@ -543,7 +545,8 @@ class EmrSubmitter(customerId: String,
             serviceAccount = serviceAccount,
             namespace = namespace,
             envVars = envVars,
-            nodeSelector = nodeSelector
+            nodeSelector = nodeSelector,
+            groupByName = groupByName
           )
         // Encode namespace into the job ID so status/kill can target the right namespace
         s"flink:$namespace:$deploymentName"

@@ -1,0 +1,232 @@
+{
+  "accuracy": 0,
+  "aggregations": [
+    {
+      "argMap": {},
+      "inputColumn": "merchant_id",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "headline",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "brief_description",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "long_description",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "price_cents",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "currency",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "inventory_count",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "primary_category",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "is_active",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "weight_grams",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "tags",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "is_expensive",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "is_in_stock",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "main_image_path",
+      "operation": 3
+    },
+    {
+      "argMap": {},
+      "inputColumn": "secondary_image_paths",
+      "operation": 3
+    }
+  ],
+  "keyColumns": [
+    "listing_id"
+  ],
+  "metaData": {
+    "columnHashes": {
+      "brief_description_last": "71e7affa4853f39abfe1114c6e9b9a08",
+      "currency_last": "1519487b8a6fc9fc8739d4a1024b6c2b",
+      "headline_last": "0fbf2feb58001e41a2c49953b9872e43",
+      "inventory_count_last": "7be0ceb3bd8ce0fb3262cdfa065ff1a4",
+      "is_active_last": "db8014fe0d5c9e0035af3846e98b6dfd",
+      "is_expensive_last": "3c174b40be9159f2bf8d26db4b0345ad",
+      "is_in_stock_last": "c4cf80478282aa8b4e6d09ef58e1bb3e",
+      "listing_id": "4f0b9fa9e93f38211a4fde12e7663c01",
+      "long_description_last": "95f583a811d2887f3561b75b109960ad",
+      "main_image_path_last": "38bd6efb2fc51121506df35baa96181b",
+      "merchant_id_last": "5ef69fdcefa30bd01564a9a551d3a5b4",
+      "price_cents_last": "b3f8a395fe5123ce1dc8d07848542c09",
+      "primary_category_last": "90133487befea175ab667dd9781f96b2",
+      "secondary_image_paths_last": "1ae9e59ed2a971b10e407c64b689f48b",
+      "tags_last": "3d44147f5b432e4a1cb0eb79d6f380b1",
+      "weight_grams_last": "35e566b8e4ffa8243d36965103bcc46d"
+    },
+    "customJson": "{\"airflowDependencies\": [{\"name\": \"wf_demo_dim_listings_snapshot_with_offset_0\", \"spec\": \"demo.dim_listings_snapshot/ds={{ macros.ds_add(ds, 0) }}\"}, {\"name\": \"wf_demo_dim_listings_mutations_with_offset_0\", \"spec\": \"demo.dim_listings_mutations/ds={{ macros.ds_add(ds, 0) }}\"}]}",
+    "executionInfo": {
+      "clusterConf": {
+        "common": {
+          "emr.config": "{\"releaseLabel\": \"emr-7.12.0\", \"instanceType\": \"m5.xlarge\", \"instanceCount\": 3, \"autoTerminationPolicy\": {\"idleTimeout\": 7200}, \"subnetName\": \"zipline-canary-subnet-main\", \"securityGroupName\": \"zipline-canary-sg\"}"
+        }
+      },
+      "conf": {
+        "common": {
+          "spark.chronon.coalesce.factor": "10",
+          "spark.chronon.partition.column": "ds",
+          "spark.chronon.partition.format": "yyyy-MM-dd",
+          "spark.chronon.table_write.format": "iceberg",
+          "spark.chronon.table_write.upload.format": "ion",
+          "spark.chronon.table_write.upload.location": "s3://zipline-warehouse-canary/data/ion_uploads/",
+          "spark.default.parallelism": "10",
+          "spark.driver.cores": "1",
+          "spark.driver.memory": "1g",
+          "spark.executor.cores": "1",
+          "spark.executor.memory": "1g",
+          "spark.hadoop.hive.metastore.client.factory.class": "com.amazonaws.glue.catalog.metastore.AWSGlueDataCatalogHiveClientFactory",
+          "spark.sql.catalog.spark_catalog": "org.apache.iceberg.spark.SparkSessionCatalog",
+          "spark.sql.catalog.spark_catalog.catalog-impl": "org.apache.iceberg.aws.glue.GlueCatalog",
+          "spark.sql.catalog.spark_catalog.warehouse": "s3://zipline-warehouse-canary/data/tables/",
+          "spark.sql.defaultUrlStreamHandlerFactory.enabled": "false",
+          "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+          "spark.sql.shuffle.partitions": "10",
+          "taskmanager.memory.process.size": "4G"
+        },
+        "modeConfigs": {
+          "backfill": {
+            "spark.chronon.coalesce.factor": "10",
+            "spark.chronon.partition.column": "ds",
+            "spark.chronon.partition.format": "yyyy-MM-dd",
+            "spark.chronon.table_write.format": "iceberg",
+            "spark.chronon.table_write.upload.format": "ion",
+            "spark.chronon.table_write.upload.location": "s3://zipline-warehouse-canary/data/ion_uploads/",
+            "spark.default.parallelism": "10",
+            "spark.driver.cores": "1",
+            "spark.driver.memory": "1g",
+            "spark.executor.cores": "1",
+            "spark.executor.memory": "1g",
+            "spark.hadoop.hive.metastore.client.factory.class": "com.amazonaws.glue.catalog.metastore.AWSGlueDataCatalogHiveClientFactory",
+            "spark.sql.catalog.spark_catalog": "org.apache.iceberg.spark.SparkSessionCatalog",
+            "spark.sql.catalog.spark_catalog.catalog-impl": "org.apache.iceberg.aws.glue.GlueCatalog",
+            "spark.sql.catalog.spark_catalog.warehouse": "s3://zipline-warehouse-canary/data/tables/",
+            "spark.sql.defaultUrlStreamHandlerFactory.enabled": "false",
+            "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+            "spark.sql.shuffle.partitions": "10",
+            "taskmanager.memory.process.size": "4G"
+          }
+        }
+      },
+      "env": {
+        "common": {
+          "ARTIFACT_PREFIX": "s3://zipline-artifacts-canary-aws",
+          "AWS_REGION": "us-west-2",
+          "CHRONON_ONLINE_ARGS": " -Ztasks=1",
+          "CLOUD_PROVIDER": "aws",
+          "CUSTOMER_ID": "canary",
+          "ENABLE_KINESIS": "true",
+          "EVAL_URL": "https://canary-eval-aws.zipline.ai",
+          "FLINK_JARS_URI": "s3://zipline-artifacts-canary/spark-3.5.3/libs/",
+          "FLINK_STATE_URI": "s3://zipline-warehouse-canary/flink-state",
+          "FRONTEND_URL": "https://canary-aws.zipline.ai",
+          "HUB_URL": "https://canary-orch-aws.zipline.ai",
+          "SPARK_CLUSTER_NAME": "zipline-emr-canary",
+          "VERSION": "latest",
+          "WAREHOUSE_PREFIX": "s3://zipline-warehouse-canary"
+        },
+        "modeEnvironments": {
+          "upload": {
+            "ARTIFACT_PREFIX": "s3://zipline-artifacts-canary-aws",
+            "AWS_REGION": "us-west-2",
+            "CHRONON_ONLINE_ARGS": " -Ztasks=1",
+            "CLOUD_PROVIDER": "aws",
+            "CUSTOMER_ID": "canary",
+            "ENABLE_KINESIS": "true",
+            "EVAL_URL": "https://canary-eval-aws.zipline.ai",
+            "FLINK_JARS_URI": "s3://zipline-artifacts-canary/spark-3.5.3/libs/",
+            "FLINK_STATE_URI": "s3://zipline-warehouse-canary/flink-state",
+            "FRONTEND_URL": "https://canary-aws.zipline.ai",
+            "HUB_URL": "https://canary-orch-aws.zipline.ai",
+            "SPARK_CLUSTER_NAME": "zipline-emr-canary",
+            "VERSION": "latest",
+            "WAREHOUSE_PREFIX": "s3://zipline-warehouse-canary"
+          }
+        }
+      },
+      "historicalBackfill": 0,
+      "stepDays": 10
+    },
+    "name": "aws.dim_listings_with_mutations.v1__3",
+    "online": 0,
+    "outputNamespace": "data",
+    "sourceFile": "group_bys/aws/dim_listings_with_mutations.py",
+    "team": "aws",
+    "version": "3"
+  },
+  "sources": [
+    {
+      "entities": {
+        "mutationTable": "demo.dim_listings_mutations",
+        "mutationTopic": "kinesis://dim-listings-mutations/serde=glue_registry/registry_name=zipline-canary/schema_name=dim-listings-mutations",
+        "query": {
+          "selects": {
+            "brief_description": "brief_description",
+            "currency": "currency",
+            "headline": "headline",
+            "inventory_count": "inventory_count",
+            "is_active": "is_active",
+            "is_expensive": "IF(price_cents > 10000, 1, 0)",
+            "is_in_stock": "IF(inventory_count > 0, 1, 0)",
+            "listing_id": "listing_id",
+            "long_description": "long_description",
+            "main_image_path": "main_image_path",
+            "merchant_id": "merchant_id",
+            "price_cents": "price_cents",
+            "primary_category": "primary_category",
+            "secondary_image_paths": "secondary_image_paths",
+            "tags": "tags",
+            "weight_grams": "weight_grams"
+          },
+          "startPartition": "2025-01-01",
+          "timeColumn": "ts"
+        },
+        "snapshotTable": "demo.dim_listings_snapshot"
+      }
+    }
+  ]
+}

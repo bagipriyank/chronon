@@ -170,6 +170,15 @@ def _get_airflow_deps_from_source(source, partition_column=None):
         # Unknown source type
         return []
 
+    # Without a partition column we can't construct a meaningful dependency
+    # spec — skip rather than fail. Happens whenever a team's conf doesn't set
+    # `spark.chronon.partition.column` and the source's query doesn't specify
+    # one either (e.g. a per-env teams file with minimal conf). Failing later
+    # (at runtime / scheduling) is preferred over an obscure assertion deep in
+    # compile-time dep generation.
+    if source_partition_column is None:
+        return []
+
     return [
         create_airflow_dependency(table, source_partition_column, additional_partitions)
         for table in tables

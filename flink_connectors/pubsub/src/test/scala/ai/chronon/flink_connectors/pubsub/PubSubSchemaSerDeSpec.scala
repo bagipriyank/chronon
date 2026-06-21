@@ -1,7 +1,8 @@
 package ai.chronon.flink_connectors.pubsub
 
-import ai.chronon.api.{IntType, StringType}
+import ai.chronon.api.{Constants, IntType, StringType}
 import ai.chronon.online.TopicInfo
+import ai.chronon.online.serde.{AvroCodec, DebeziumMutationMapper}
 import com.google.api.gax.rpc.{NotFoundException, StatusCode}
 import com.google.cloud.pubsub.v1.SchemaServiceClient
 import com.google.protobuf.DynamicMessage
@@ -161,6 +162,103 @@ class PubSubSchemaSerDeSpec extends AnyFlatSpec {
     val mutationWithoutNull = serDeWithoutNull.fromBytes(emptyMessage.toByteArray)
     assert(mutationWithoutNull.after(0) == "")
     assert(mutationWithoutNull.after(1) == 0)
+  }
+
+  // ============== Debezium Tests ==============
+
+  private val debeziumEnvelopeSchemaStr =
+    """{
+      |  "type": "record", "name": "Envelope", "namespace": "test",
+      |  "fields": [
+      |    {"name": "op", "type": "string"},
+      |    {"name": "before", "type": ["null", {
+      |      "type": "record", "name": "Value",
+      |      "fields": [
+      |        {"name": "id",   "type": "int"},
+      |        {"name": "name", "type": ["null", "string"], "default": null}
+      |      ]
+      |    }], "default": null},
+      |    {"name": "after",  "type": ["null", "test.Value"], "default": null},
+      |    {"name": "source", "type": {
+      |      "type": "record", "name": "Source",
+      |      "fields": [{"name": "ts_ms", "type": ["null", "long"], "default": null}]
+      |    }},
+      |    {"name": "ts_ms", "type": ["null", "long"], "default": null}
+      |  ]
+      |}""".stripMargin
+
+  private val debeziumTs = 1710631967915L
+
+  it should "use DebeziumAvroSerDe when debezium=true and schema type is AVRO" in {
+    val topicInfo = TopicInfo("cdc-topic", "pubsub", Map(
+      PubSubSchemaSerDe.ProjectKey -> "test-project",
+      PubSubSchemaSerDe.SchemaIdKey -> "cdc-schema",
+      DebeziumMutationMapper.DebeziumKey -> "true"
+    ))
+    val mockedSchemaClient = mock[SchemaServiceClient]
+    val schema = Schema.newBuilder()
+      .setName("cdc-schema").setType(Schema.Type.AVRO).setDefinition(debeziumEnvelopeSchemaStr).build()
+    when(mockedSchemaClient.getSchema(any[SchemaName]())).thenReturn(schema)
+
+    val serDe = new MockPubSubSchemaSerDe(topicInfo, mockedSchemaClient)
+    val fields = serDe.schema.fields
+    assert(fields.exists(_.name == "id"))
+    assert(fields.exists(_.name == "name"))
+    assert(fields.exists(_.name == Constants.MutationTimeColumn))
+    assert(fields.exists(_.name == Constants.ReversalColumn))
+  }
+
+  it should "deserialize a Debezium Avro op=c envelope from PubSub" in {
+    val topicInfo = TopicInfo("cdc-topic", "pubsub", Map(
+      PubSubSchemaSerDe.ProjectKey -> "test-project",
+      PubSubSchemaSerDe.SchemaIdKey -> "cdc-schema",
+      DebeziumMutationMapper.DebeziumKey -> "true"
+    ))
+    val mockedSchemaClient = mock[SchemaServiceClient]
+    val pubsubSchema = Schema.newBuilder()
+      .setName("cdc-schema").setType(Schema.Type.AVRO).setDefinition(debeziumEnvelopeSchemaStr).build()
+    when(mockedSchemaClient.getSchema(any[SchemaName]())).thenReturn(pubsubSchema)
+
+    val serDe = new MockPubSubSchemaSerDe(topicInfo, mockedSchemaClient)
+
+    val envelopeSchema = AvroCodec.of(debeziumEnvelopeSchemaStr).schema
+    val valueSchema = envelopeSchema.getField("before").schema().getTypes.get(1)
+    val sourceSchema = envelopeSchema.getField("source").schema()
+    val value = new org.apache.avro.generic.GenericData.Record(valueSchema)
+    value.put("id", 5)
+    value.put("name", "Carol")
+    val src = new org.apache.avro.generic.GenericData.Record(sourceSchema)
+    src.put("ts_ms", debeziumTs: java.lang.Long)
+    val envelope = new org.apache.avro.generic.GenericData.Record(envelopeSchema)
+    envelope.put("op", "c")
+    envelope.put("before", null)
+    envelope.put("after", value)
+    envelope.put("source", src)
+    envelope.put("ts_ms", null)
+    val bytes = AvroCodec.of(debeziumEnvelopeSchemaStr).encodeBinary(envelope)
+
+    val mutation = serDe.fromBytes(bytes)
+    assert(mutation.before == null)
+    assert(mutation.after != null)
+    assert(mutation.after(1) == "Carol")
+    assert(mutation.after(2) == (debeziumTs: java.lang.Long))
+    assert(mutation.after(3) == (false: java.lang.Boolean))
+  }
+
+  it should "throw when debezium=true and schema type is PROTOCOL_BUFFER" in {
+    val proto3SchemaStr = """syntax = "proto3"; message X { string f = 1; }"""
+    val topicInfo = TopicInfo("cdc-topic", "pubsub", Map(
+      PubSubSchemaSerDe.ProjectKey -> "test-project",
+      PubSubSchemaSerDe.SchemaIdKey -> "cdc-schema",
+      DebeziumMutationMapper.DebeziumKey -> "true"
+    ))
+    val mockedSchemaClient = mock[SchemaServiceClient]
+    val schema = Schema.newBuilder()
+      .setName("cdc-schema").setType(Schema.Type.PROTOCOL_BUFFER).setDefinition(proto3SchemaStr).build()
+    when(mockedSchemaClient.getSchema(any[SchemaName]())).thenReturn(schema)
+
+    val serDe = new MockPubSubSchemaSerDe(topicInfo, mockedSchemaClient)
+    assertThrows[IllegalArgumentException] { serDe.schema }
   }
 
   // ============== Proto2 Tests ==============

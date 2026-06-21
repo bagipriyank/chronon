@@ -13,8 +13,11 @@ import scala.jdk.CollectionConverters._
   * that are injected into the cloud-agnostic [[K8sFlinkSubmitter]].
   */
 object EksFlinkSubmitter {
-  // EMR on EKS Flink image
-  val FlinkImage = "public.ecr.aws/emr-on-eks/flink/emr-7.12.0-flink:latest"
+  // EMR on EKS Flink image — pinned by digest so AWS pushing a new `:latest` doesn't
+  // change /opt/flink/lib/ between job restarts (which surfaces as
+  // IllegalStateException: "The library registration references a different set of library BLOBs").
+  val FlinkImage =
+    "public.ecr.aws/emr-on-eks/flink/emr-7.12.0-flink@sha256:13efc2b96c4b2385553bf5423dd2f5ba3467cef2711cafa78502a1d64b4eafe6"
 
   // Default path for the libs we need for Spark expression eval in Flink
   val DefaultS3FlinkJarsBasePath = "s3://zipline-spark-libs/spark-3.5.3/libs/"
@@ -31,6 +34,27 @@ object EksFlinkSubmitter {
   }
 
   def shellQuote(s: String): String = "'" + s.replace("'", "'\"'\"'") + "'"
+
+  // Extra pod labels stamped on the Flink JobManager/TaskManager pods, read from an env var so
+  // deployments can attach their own labels without code changes. Merged with the per-job
+  // chronon/job_name label by K8sFlinkSubmitter. Format: comma-separated key=value pairs, split
+  // on the first '=' (values may contain '='); entries with an empty key or value are skipped.
+  private[aws] val PodTemplateLabelsEnvVar = "FLINK_EKS_POD_LABELS"
+
+  private[aws] def parsePodTemplateLabels(raw: Option[String]): Map[String, String] =
+    raw.map(_.trim).filter(_.nonEmpty).fold(Map.empty[String, String]) { s =>
+      s.split(",")
+        .toSeq
+        .flatMap { entry =>
+          val eq = entry.indexOf('=')
+          if (eq > 0 && eq < entry.length - 1) {
+            val key = entry.substring(0, eq).trim
+            val value = entry.substring(eq + 1).trim
+            if (key.nonEmpty && value.nonEmpty) Some(key -> value) else None
+          } else None
+        }
+        .toMap
+    }
 
   // AWS IRSA credential config and Prometheus metrics reporter — injected into K8sFlinkSubmitter
   // so the base class stays cloud-agnostic.
@@ -57,7 +81,7 @@ object EksFlinkSubmitter {
 
     val initContainer = new java.util.HashMap[String, Object]()
     initContainer.put("name", "download-jars")
-    initContainer.put("image", "amazon/aws-cli:latest")
+    initContainer.put("image", "amazon/aws-cli:2.34.45")
     val commands = new java.util.ArrayList[String]()
     commands.add("sh"); commands.add("-c"); commands.add(downloadCommands)
     initContainer.put("command", commands)
@@ -100,6 +124,7 @@ object EksFlinkSubmitter {
       extraJarNames = EksOnlyAdditionalJarNames,
       defaultJarsBasePath = DefaultS3FlinkJarsBasePath,
       k8sConfig = k8sConfig,
-      ingressBaseUrl = ingressBaseUrl
+      ingressBaseUrl = ingressBaseUrl,
+      podTemplateLabels = parsePodTemplateLabels(sys.env.get(PodTemplateLabelsEnvVar))
     )
 }

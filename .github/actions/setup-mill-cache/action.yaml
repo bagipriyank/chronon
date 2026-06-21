@@ -1,0 +1,96 @@
+name: Setup Mill cache
+description: Restore Chronon CI dependency caches and optionally Mill build outputs.
+
+inputs:
+  cache-root:
+    description: Base directory for tool caches.
+    required: false
+    default: /root/.cache
+  scala-version:
+    description: Scala version for cache partitioning.
+    required: false
+    default: none
+  cache-output:
+    description: Whether to cache Mill's out directory.
+    required: false
+    default: "false"
+  output-cache-scope:
+    description: Job-specific scope for the Mill out cache.
+    required: false
+    default: default
+  coursier-repositories:
+    description: Optional COURSIER_REPOSITORIES value, usually a Maven proxy.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # TODO(david): remove once chronon-ci:latest is republished from main with JDK 17.
+    # Mill 1.1.6 launcher is class file v61 (JDK 17); stale image still has JDK 11.
+    # GitHub-hosted runners already ship JDK 17 (Temurin); only the stale container needs apt install.
+    - name: Ensure JDK 17
+      shell: bash
+      run: |
+        set -eo pipefail
+        find_jdk17() {
+          for d in "${JAVA_HOME_17_X64:-}" /usr/lib/jvm/temurin-17-jdk-* /usr/lib/jvm/java-17-openjdk-* /usr/lib/jvm/zulu-17-* /usr/lib/jvm/*-17-jdk-*; do
+            if [ -n "$d" ] && [ -x "$d/bin/java" ]; then
+              echo "$d"
+              return 0
+            fi
+          done
+          return 0
+        }
+        JDK17="$(find_jdk17)"
+        if [ -z "$JDK17" ]; then
+          SUDO=""
+          [ "$(id -u)" != "0" ] && SUDO="sudo"
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends openjdk-17-jdk
+          JDK17="$(find_jdk17)"
+        fi
+        if [ -z "$JDK17" ]; then
+          echo "Failed to locate JDK 17 after install" >&2
+          exit 1
+        fi
+        echo "JAVA_HOME=$JDK17" >> "$GITHUB_ENV"
+        echo "$JDK17/bin" >> "$GITHUB_PATH"
+
+    - name: Configure cache paths
+      shell: bash
+      env:
+        CACHE_ROOT: ${{ inputs.cache-root }}
+        CHRONON_COURSIER_REPOSITORIES: ${{ inputs.coursier-repositories }}
+      run: |
+        mkdir -p "$CACHE_ROOT/coursier" "$CACHE_ROOT/mill" "$CACHE_ROOT/uv"
+        {
+          echo "XDG_CACHE_HOME=$CACHE_ROOT"
+          echo "COURSIER_CACHE=$CACHE_ROOT/coursier"
+          echo "UV_CACHE_DIR=$CACHE_ROOT/uv"
+        } >> "$GITHUB_ENV"
+
+        if [ -n "$CHRONON_COURSIER_REPOSITORIES" ]; then
+          echo "COURSIER_REPOSITORIES=$CHRONON_COURSIER_REPOSITORIES" >> "$GITHUB_ENV"
+        fi
+
+    - name: Restore dependency caches
+      uses: actions/cache@v5
+      with:
+        path: |
+          ${{ inputs.cache-root }}/coursier
+          ${{ inputs.cache-root }}/mill
+          ${{ inputs.cache-root }}/uv
+        key: mill-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.mill-version', 'mill', 'build.mill', '**/package.mill', 'python/pyproject.toml', 'python/uv.lock', 'python/requirements/**') }}
+        restore-keys: |
+          mill-deps-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Restore Mill output cache
+      if: ${{ inputs.cache-output == 'true' }}
+      uses: actions/cache@v5
+      with:
+        path: out
+        key: mill-out-${{ runner.os }}-${{ runner.arch }}-${{ inputs.output-cache-scope }}-${{ inputs.scala-version }}-${{ hashFiles('.github/image/Dockerfile', '.mill-version', 'mill', 'build.mill', '**/package.mill', '**/src/**', 'python/**') }}
+        restore-keys: |
+          mill-out-${{ runner.os }}-${{ runner.arch }}-${{ inputs.output-cache-scope }}-${{ inputs.scala-version }}-
+          mill-out-${{ runner.os }}-${{ runner.arch }}-${{ inputs.output-cache-scope }}-

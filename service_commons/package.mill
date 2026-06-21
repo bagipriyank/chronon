@@ -11,10 +11,10 @@ trait ServiceCommonsModule extends Cross.Module[String] with build.BaseModule {
   def moduleDeps = Seq(build.api(crossValue), build.online(crossValue))
 
   def mvnDeps = build.Constants.commonDeps ++ build.Constants.loggingApiDeps ++ build.Constants.utilityDeps ++ Seq(
-    mvn"io.vertx:vertx-core:4.5.24",
-    mvn"io.vertx:vertx-web:4.5.24",
-    mvn"io.vertx:vertx-config:4.5.24",
-    mvn"io.vertx:vertx-micrometer-metrics:4.5.24".exclude("com.google.protobuf" -> "protobuf-java"),
+    mvn"io.vertx:vertx-core:4.5.27",
+    mvn"io.vertx:vertx-web:4.5.27",
+    mvn"io.vertx:vertx-config:4.5.27",
+    mvn"io.vertx:vertx-micrometer-metrics:4.5.27".exclude("com.google.protobuf" -> "protobuf-java"),
     mvn"io.micrometer:micrometer-registry-otlp:1.13.6".exclude("com.google.protobuf" -> "protobuf-java"),
     mvn"io.micrometer:micrometer-registry-prometheus:1.10.13".exclude("com.google.protobuf" -> "protobuf-java"),
     mvn"io.netty:netty-all:4.1.125.Final"
@@ -28,8 +28,8 @@ trait ServiceCommonsModule extends Cross.Module[String] with build.BaseModule {
       mvn"org.junit.jupiter:junit-jupiter-engine:5.10.2",
       mvn"org.junit.platform:junit-platform-launcher:1.10.2",
       mvn"com.github.sbt.junit:jupiter-interface:0.11.4",
-      mvn"io.vertx:vertx-junit5:4.5.24",
-      mvn"io.vertx:vertx-web-client:4.5.24"
+      mvn"io.vertx:vertx-junit5:4.5.27",
+      mvn"io.vertx:vertx-web-client:4.5.27"
     )
   }
 }

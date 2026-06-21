@@ -73,12 +73,13 @@ case class MonolithJoinPlanner(join: Join)(implicit outputPartitionSpec: Partiti
       // Return both the GroupBy dependency and any upstream join dependencies
       Seq(groupByDep) ++ upstreamJoinDeps
     }
+    val metadataUploadDeps = allDeps
 
     val metaData =
       MetaDataUtils.layer(join.metaData,
                           "metadata_upload",
                           join.metaData.name + "__metadata_upload",
-                          allDeps.toSeq,
+                          metadataUploadDeps.toSeq,
                           Some(stepDays))
     val node = new planner.JoinMetadataUpload().setJoin(join)
     toNode(metaData, _.setJoinMetadataUpload(node), semanticMonolithJoin(join))

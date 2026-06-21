@@ -2,7 +2,7 @@ package ai.chronon.online.metrics
 
 import ai.chronon.online.metrics.Metrics.Context
 import io.opentelemetry.api.OpenTelemetry
-import io.opentelemetry.api.common.{AttributeKey, Attributes}
+import io.opentelemetry.api.common.{AttributeKey, Attributes, AttributesBuilder}
 import io.opentelemetry.api.metrics.{DoubleGauge, LongCounter, LongGauge, LongHistogram, Meter}
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator
 import io.opentelemetry.context.propagation.ContextPropagators
@@ -23,6 +23,15 @@ class OtelMetricsReporter(openTelemetry: OpenTelemetry) extends MetricsReporter 
     .meterBuilder("ai.chronon")
     .setInstrumentationVersion("0.0.0")
     .build()
+
+  // SdkMeterProvider supports forceFlush(); the no-op provider used when metrics are disabled
+  // does not. We can't pattern-match on getMeterProvider() because OpenTelemetrySdk hands back
+  // an ObfuscatedMeterProvider wrapper that doesn't expose the underlying SdkMeterProvider —
+  // unwrap via OpenTelemetrySdk.getSdkMeterProvider() instead.
+  private val sdkMeterProvider: Option[SdkMeterProvider] = openTelemetry match {
+    case sdk: OpenTelemetrySdk => Some(sdk.getSdkMeterProvider)
+    case _                     => None
+  }
 
   val tagCache: TTLCache[Context, Attributes] = new TTLCache[Context, Attributes](
     { ctx =>
@@ -77,9 +86,21 @@ class OtelMetricsReporter(openTelemetry: OpenTelemetry) extends MetricsReporter 
     val mergedAttributes = mergeAttributes(tagCache(context), tags)
     histogram.record(value, mergedAttributes)
   }
+
+  override def flush(timeoutMillis: Long): Unit = sdkMeterProvider.foreach { provider =>
+    // forceFlush returns a CompletableResultCode; join() blocks up to timeoutMillis. If the
+    // export fails or times out we log and move on rather than throwing — losing a metric
+    // batch must not fail the underlying job.
+    val result = provider.forceFlush().join(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
+    if (!result.isSuccess) {
+      OtelMetricsReporter.logger.warn(s"OTel metrics forceFlush did not complete within ${timeoutMillis}ms")
+    }
+  }
 }
 
 object OtelMetricsReporter {
+
+  private val logger = org.slf4j.LoggerFactory.getLogger(classOf[OtelMetricsReporter])
 
   val MetricsReader = "ai.chronon.metrics.reader"
   val MetricsExporterUrlKey = "ai.chronon.metrics.exporter.url"
@@ -130,33 +151,83 @@ object OtelMetricsReporter {
     }
   }
 
-  def buildOpenTelemetryClient(metricReader: MetricReader): OpenTelemetry = {
-    // Create resource with service information
-    val configuredResourceKVPairs = System
-      .getProperty(MetricsExporterResourceKey, "")
-      .split(",")
-      .map(_.split("="))
-      .filter(_.length == 2)
-      .map { case Array(k, v) => k.trim -> v.trim }
-      .toMap
+  def buildOpenTelemetryClient(metricReader: MetricReader): OpenTelemetry =
+    buildOpenTelemetryClient(metricReader, sys.env.get)
 
-    val builder = Attributes.builder()
-    configuredResourceKVPairs.map { case (k, v) =>
-      val key = AttributeKey.stringKey(k)
-      builder.put(key, v)
-    }
-
-    val resource = Resource.getDefault.merge(Resource.create(builder.build()))
+  // Overload that accepts an env lookup function for testability.
+  private[metrics] def buildOpenTelemetryClient(metricReader: MetricReader,
+                                                envLookup: String => Option[String]): OpenTelemetry = {
+    val resource = buildResource(envLookup)
 
     val meterProvider = SdkMeterProvider.builder
       .setResource(resource)
       .registerMetricReader(metricReader)
       .build
 
-    // Build the OpenTelemetry object with only meter provider
+    // Belt-and-suspenders: even with explicit Context.flush() at known exit points, any new
+    // caller that records gauges right before main() returns would re-introduce the periodic-
+    // reader race. The shutdown hook is best-effort and only adds latency proportional to the
+    // outstanding metrics — long-running services that have already drained will see it return
+    // immediately.
+    Runtime.getRuntime.addShutdownHook(shutdownFlushHook(meterProvider, ShutdownFlushTimeoutMillis))
+
     OpenTelemetrySdk.builder
       .setMeterProvider(meterProvider)
       .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance))
       .build
   }
+
+  // Build resource attributes. Precedence is last-write-wins:
+  // system property first, then OTEL_SERVICE_NAME for service.name.
+  private[metrics] def buildResource(envLookup: String => Option[String]): Resource = {
+    // Precedence (later wins):
+    //   1. OTEL_RESOURCE_ATTRIBUTES env var
+    //   2. ai.chronon.metrics.exporter.resources system property
+    //   3. OTEL_SERVICE_NAME env var (highest priority for service.name)
+    val builder = Attributes.builder()
+    appendParsedAttributes(builder, envLookup("OTEL_RESOURCE_ATTRIBUTES"))
+    appendParsedAttributes(builder, Option(System.getProperty(MetricsExporterResourceKey, "")).filter(_.trim.nonEmpty))
+    envLookup("OTEL_SERVICE_NAME").filter(_.trim.nonEmpty).foreach { name =>
+      builder.put(AttributeKey.stringKey("service.name"), name.trim)
+    }
+
+    Resource.getDefault.merge(Resource.create(builder.build()))
+  }
+
+  // Parse comma-separated key=value pairs into the Attributes builder.
+  // Split on first '=' only (values may contain '='), reject empty keys/values.
+  // Mirrors ChrononServiceLauncher.appendParsedAttributes.
+  private def appendParsedAttributes(builder: AttributesBuilder, raw: Option[String]): Unit =
+    raw.filter(_.trim.nonEmpty).foreach { s =>
+      s.trim.split(",").foreach { entry =>
+        val eq = entry.indexOf('=')
+        if (eq > 0 && eq < entry.length - 1) {
+          val key = entry.substring(0, eq).trim
+          val value = entry.substring(eq + 1).trim
+          if (key.nonEmpty && value.nonEmpty) {
+            builder.put(AttributeKey.stringKey(key), value)
+          }
+        }
+      }
+    }
+
+  private[metrics] def shutdownFlushHook(provider: SdkMeterProvider, timeoutMillis: Long): Thread = {
+    val t = new Thread(new Runnable {
+      override def run(): Unit = {
+        try {
+          provider.forceFlush().join(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
+          provider.shutdown().join(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch {
+          // The JVM is exiting; do not surface anything that could mask the actual exit cause.
+          case _: Throwable => ()
+        }
+      }
+    })
+    t.setName("otel-metrics-flush-shutdown")
+    t
+  }
+
+  // Caps how long the shutdown hook will block on outstanding OTLP exports. Picked to match
+  // ScrapeWaitSeconds so behavior aligns with the explicit flush at GroupByUpload exit.
+  private val ShutdownFlushTimeoutMillis: Long = 15000L
 }

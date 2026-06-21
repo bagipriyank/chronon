@@ -143,6 +143,8 @@ class EmrServerlessSubmitter(
           .map(EmrServerlessSubmitter.parseNodeSelector)
           .getOrElse(Map.empty)
 
+        val groupByName = JobSubmitter.getArgValue(args.toArray, GroupByNameArgKeyword).filter(_.nonEmpty)
+
         val deploymentName = eksFlinkSubmitter
           .getOrElse(
             throw new RuntimeException("K8sFlinkSubmitter is required for Flink jobs")
@@ -160,7 +162,8 @@ class EmrServerlessSubmitter(
             serviceAccount = serviceAccount,
             namespace = namespace,
             envVars = envVars,
-            nodeSelector = nodeSelector
+            nodeSelector = nodeSelector,
+            groupByName = groupByName
           )
         s"flink:$namespace:$deploymentName"
 

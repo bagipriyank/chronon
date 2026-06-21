@@ -1,0 +1,187 @@
+{
+  "joinParts": [
+    {
+      "groupBy": {
+        "keyColumns": [
+          "listing_id"
+        ],
+        "metaData": {
+          "columnHashes": {
+            "currency": "b2aad433fc97580aec579df768231736",
+            "headline": "0844b1d571ad3eb2abb8c96ebba33bcf",
+            "is_active": "4d02d28bb2ce4e1596df22d01dd01042",
+            "listing_id": "d834698d5d04fea6b207722d65920383",
+            "merchant_id": "61f17c9879a944bdeafc9c4113f3f012",
+            "price_cents": "3c0296486c47250f49233594ec981935"
+          },
+          "executionInfo": {
+            "clusterConf": {
+              "common": {
+                "emr.config": "{\"releaseLabel\": \"emr-7.12.0\", \"instanceType\": \"m5.xlarge\", \"instanceCount\": 3, \"autoTerminationPolicy\": {\"idleTimeout\": 7200}, \"subnetName\": \"zipline-canary-subnet-main\", \"securityGroupName\": \"zipline-canary-sg\"}"
+              }
+            },
+            "conf": {
+              "common": {
+                "spark.chronon.coalesce.factor": "10",
+                "spark.chronon.partition.column": "ds",
+                "spark.chronon.partition.format": "yyyy-MM-dd",
+                "spark.chronon.table_write.format": "iceberg",
+                "spark.default.parallelism": "10",
+                "spark.driver.cores": "1",
+                "spark.driver.memory": "1g",
+                "spark.executor.cores": "1",
+                "spark.executor.memory": "1g",
+                "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+                "spark.sql.catalog.workspace": "io.unitycatalog.spark.UCSingleCatalog",
+                "spark.sql.catalog.workspace.auth.oauth.clientId": "{DATABRICKS_CLIENT_ID}",
+                "spark.sql.catalog.workspace.auth.oauth.clientSecret": "{DATABRICKS_CLIENT_SECRET}",
+                "spark.sql.catalog.workspace.auth.oauth.uri": "https://dbc-050d6f00-dcb3.cloud.databricks.com/oidc/v1/token",
+                "spark.sql.catalog.workspace.auth.type": "oauth",
+                "spark.sql.catalog.workspace.renewCredential.enabled": "false",
+                "spark.sql.catalog.workspace.uri": "https://dbc-050d6f00-dcb3.cloud.databricks.com",
+                "spark.sql.catalog.workspace_iceberg": "org.apache.iceberg.spark.SparkCatalog",
+                "spark.sql.catalog.workspace_iceberg.credential": "{DATABRICKS_CREDENTIAL}",
+                "spark.sql.catalog.workspace_iceberg.oauth2-server-uri": "https://dbc-050d6f00-dcb3.cloud.databricks.com/oidc/v1/token",
+                "spark.sql.catalog.workspace_iceberg.scope": "all-apis",
+                "spark.sql.catalog.workspace_iceberg.type": "rest",
+                "spark.sql.catalog.workspace_iceberg.uri": "https://dbc-050d6f00-dcb3.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest",
+                "spark.sql.catalog.workspace_iceberg.warehouse": "workspace",
+                "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension,ai.chronon.spark.extensions.ChrononDeltaFixExtension,org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+                "spark.sql.shuffle.partitions": "10",
+                "spark.sql.warehouse.dir": "s3://zipline-warehouse-canary/data/uc-poc/warehouse/"
+              }
+            },
+            "env": {
+              "common": {
+                "ARTIFACT_PREFIX": "s3://zipline-artifacts-canary",
+                "AWS_REGION": "us-west-2",
+                "CLOUD_PROVIDER": "aws",
+                "CUSTOMER_ID": "dev",
+                "EVAL_URL": "http://localhost:3904",
+                "FETCHER_URL": "http://localhost:9000",
+                "FRONTEND_URL": "https://canary-aws.zipline.ai",
+                "HUB_URL": "https://canary-orch-aws.zipline.ai",
+                "SPARK_CLUSTER_NAME": "zipline-emr-canary",
+                "VERSION": "latest",
+                "WAREHOUSE_PREFIX": "s3://zipline-warehouse-canary"
+              }
+            },
+            "historicalBackfill": 0,
+            "stepDays": 30
+          },
+          "name": "aws_databricks.dim_listings.sparse_v1__0",
+          "online": 0,
+          "outputNamespace": "workspace_iceberg.poc",
+          "team": "aws_databricks",
+          "version": "0"
+        },
+        "sources": [
+          {
+            "entities": {
+              "query": {
+                "selects": {
+                  "currency": "currency",
+                  "headline": "headline",
+                  "is_active": "is_active",
+                  "listing_id": "listing_id",
+                  "merchant_id": "merchant_id",
+                  "price_cents": "price_cents"
+                },
+                "startPartition": "2025-01-01"
+              },
+              "snapshotTable": "workspace_iceberg.poc.aws_databricks_exports_dim_listings_sparse__0"
+            }
+          }
+        ]
+      },
+      "useLongNames": 0
+    }
+  ],
+  "left": {
+    "entities": {
+      "query": {
+        "selects": {
+          "listing_id": "listing_id"
+        },
+        "startPartition": "2025-01-01"
+      },
+      "snapshotTable": "workspace_iceberg.poc.aws_databricks_exports_dim_listings_sparse__0"
+    }
+  },
+  "metaData": {
+    "columnHashes": {
+      "listing_id": "9d67e7668110972f1fbaeb3bb6ea4265",
+      "listing_id_currency": "e2222e1274166072f6301f4836433d4b",
+      "listing_id_headline": "8b1de6b58d30e40c6caaeec4ed4fc939",
+      "listing_id_is_active": "07842d7dc1601351abb1f4bf329b2e26",
+      "listing_id_listing_id": "2ef1780b53bc6df8bb661338fd711ffd",
+      "listing_id_merchant_id": "6e14b74d5f5a1aa9dba07e2b7eed32e7",
+      "listing_id_price_cents": "e3172bc29a872220b0a096f98fdf65a8"
+    },
+    "customJson": "{\"airflowDependencies\": [{\"name\": \"wf_workspace_iceberg_poc_aws_databricks_exports_dim_listings_sparse__0_with_offset_0\", \"spec\": \"workspace_iceberg.poc.aws_databricks_exports_dim_listings_sparse__0/ds={{ macros.ds_add(ds, 0) }}\"}]}",
+    "executionInfo": {
+      "clusterConf": {
+        "common": {
+          "emr.config": "{\"releaseLabel\": \"emr-7.12.0\", \"instanceType\": \"m5.xlarge\", \"instanceCount\": 3, \"autoTerminationPolicy\": {\"idleTimeout\": 7200}, \"subnetName\": \"zipline-canary-subnet-main\", \"securityGroupName\": \"zipline-canary-sg\"}"
+        }
+      },
+      "conf": {
+        "common": {
+          "spark.chronon.coalesce.factor": "10",
+          "spark.chronon.partition.column": "ds",
+          "spark.chronon.partition.format": "yyyy-MM-dd",
+          "spark.chronon.table_write.format": "iceberg",
+          "spark.default.parallelism": "10",
+          "spark.driver.cores": "1",
+          "spark.driver.memory": "1g",
+          "spark.executor.cores": "1",
+          "spark.executor.memory": "1g",
+          "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+          "spark.sql.catalog.workspace": "io.unitycatalog.spark.UCSingleCatalog",
+          "spark.sql.catalog.workspace.auth.oauth.clientId": "{DATABRICKS_CLIENT_ID}",
+          "spark.sql.catalog.workspace.auth.oauth.clientSecret": "{DATABRICKS_CLIENT_SECRET}",
+          "spark.sql.catalog.workspace.auth.oauth.uri": "https://dbc-050d6f00-dcb3.cloud.databricks.com/oidc/v1/token",
+          "spark.sql.catalog.workspace.auth.type": "oauth",
+          "spark.sql.catalog.workspace.renewCredential.enabled": "false",
+          "spark.sql.catalog.workspace.uri": "https://dbc-050d6f00-dcb3.cloud.databricks.com",
+          "spark.sql.catalog.workspace_iceberg": "org.apache.iceberg.spark.SparkCatalog",
+          "spark.sql.catalog.workspace_iceberg.credential": "{DATABRICKS_CREDENTIAL}",
+          "spark.sql.catalog.workspace_iceberg.oauth2-server-uri": "https://dbc-050d6f00-dcb3.cloud.databricks.com/oidc/v1/token",
+          "spark.sql.catalog.workspace_iceberg.scope": "all-apis",
+          "spark.sql.catalog.workspace_iceberg.type": "rest",
+          "spark.sql.catalog.workspace_iceberg.uri": "https://dbc-050d6f00-dcb3.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest",
+          "spark.sql.catalog.workspace_iceberg.warehouse": "workspace",
+          "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension,ai.chronon.spark.extensions.ChrononDeltaFixExtension,org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+          "spark.sql.shuffle.partitions": "10",
+          "spark.sql.warehouse.dir": "s3://zipline-warehouse-canary/data/uc-poc/warehouse/"
+        }
+      },
+      "env": {
+        "common": {
+          "ARTIFACT_PREFIX": "s3://zipline-artifacts-canary",
+          "AWS_REGION": "us-west-2",
+          "CLOUD_PROVIDER": "aws",
+          "CUSTOMER_ID": "dev",
+          "EVAL_URL": "http://localhost:3904",
+          "FETCHER_URL": "http://localhost:9000",
+          "FRONTEND_URL": "https://canary-aws.zipline.ai",
+          "HUB_URL": "https://canary-orch-aws.zipline.ai",
+          "SPARK_CLUSTER_NAME": "zipline-emr-canary",
+          "VERSION": "latest",
+          "WAREHOUSE_PREFIX": "s3://zipline-warehouse-canary"
+        }
+      },
+      "offlineSchedule": "@daily",
+      "stepDays": 30
+    },
+    "name": "aws_databricks.demo.sparse_v1",
+    "online": 0,
+    "outputNamespace": "workspace_iceberg.poc",
+    "production": 0,
+    "samplePercent": 100.0,
+    "sourceFile": "joins/aws_databricks/demo.py",
+    "team": "aws_databricks"
+  },
+  "rowIds": [],
+  "useLongNames": 0
+}

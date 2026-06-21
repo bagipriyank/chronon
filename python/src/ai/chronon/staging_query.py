@@ -12,6 +12,7 @@ import gen_thrift.api.ttypes as ttypes
 import gen_thrift.common.ttypes as common
 from ai.chronon import utils
 from ai.chronon.airflow_helpers import AIRFLOW_DEPENDENCIES_KEY
+from ai.chronon.cli.compile.config_origin import mark_factory_created_config
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,7 @@ def StagingQuery(
     step_days: Optional[int] = None,
     recompute_days: Optional[int] = None,
     additional_partitions: List[str] = None,
+    environments: Optional[List[str]] = None,
 ) -> ttypes.StagingQuery:
     """
     Creates a StagingQuery object for executing arbitrary SQL queries with templated date parameters.
@@ -237,9 +239,20 @@ def StagingQuery(
         X days later) or when you want partially mature aggregations (i.e. a 7 day window, but start computing it from
         day 1, and refresh it for the next 6 days)
     :type recompute_days: int
+    :param environments:
+        List of environments where this StagingQuery should be deployed/available.
+        Defaults to ['prod']. Valid values: 'prod', 'canary' (case-insensitive).
+    :type environments: List[str]
     :return:
         A StagingQuery object
     """
+    # `environments` is left unset (None) when the author doesn't specify it.
+    # Downstream consumers (e.g. hub schedule-all) default the missing/empty
+    # case to ['prod']. Keeping it unset on disk avoids baking a default into
+    # every compiled conf.
+    if environments:
+        environments = utils.convert_environments_to_enum(environments)
+
     # Get caller's filename to assign team
     team = utils._get_team_from_caller()
 
@@ -317,6 +330,7 @@ def StagingQuery(
         tableProperties=table_properties,
         version=str(version) if version is not None else None,
         additionalOutputPartitionColumns=additional_partitions,
+        environments=environments,
     )
 
     thrift_deps = []
@@ -340,4 +354,4 @@ def StagingQuery(
         lambda self: _get_output_table_name(self, full_name=True)
     )
 
-    return staging_query
+    return mark_factory_created_config(staging_query)

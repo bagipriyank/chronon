@@ -208,6 +208,68 @@ def test_collect_values_unknown_team_raises(temp_repo):
     assert "nope" in str(exc.value.message)
 
 
+def test_collect_values_canary_env_loads_canary_teams_file(temp_repo):
+    """`--env canary` must load teams.canary.py, not teams.py. The canary file
+    can declare totally different env values for the same team name; the
+    inspector should surface those instead of the prod ones."""
+    canary_py = temp_repo / "teams.canary.py"
+    canary_py.write_text(textwrap.dedent('''
+        from gen_thrift.api.ttypes import Team
+        from ai.chronon.types import EnvironmentVariables
+
+        default = Team(
+            outputNamespace="default_ns_canary",
+            env=EnvironmentVariables(
+                common={
+                    "VERSION": "canary-build",
+                    "CUSTOMER_ID": "canary-customer",
+                },
+            ),
+        )
+
+        gcp = Team(
+            outputNamespace="gcp_ns_canary",
+            env=EnvironmentVariables(
+                common={
+                    "CUSTOMER_ID": "gcp-canary",
+                    "GCP_PROJECT_ID": "canary-project",
+                },
+            ),
+        )
+    ''').lstrip())
+
+    # prod path still works and surfaces prod values.
+    prod_values, _ = collect_values(str(temp_repo), team="gcp", env="prod")
+    assert prod_values["env.CUSTOMER_ID"] == "canary"  # prod's gcp uses this
+    assert prod_values["env.GCP_PROJECT_ID"] == "canary-443022"
+
+    # canary path surfaces values from teams.canary.py.
+    canary_values, source = collect_values(str(temp_repo), team="gcp", env="canary")
+    assert source == "gcp"
+    assert canary_values["env.CUSTOMER_ID"] == "gcp-canary"
+    assert canary_values["env.GCP_PROJECT_ID"] == "canary-project"
+    # default-team inheritance from teams.canary.py (not teams.py).
+    assert canary_values["env.VERSION"] == "canary-build"
+
+
+def test_collect_values_canary_env_without_teams_canary_py_raises(temp_repo):
+    """`--env canary` against a repo with no teams.canary.py should fail with
+    an actionable error pointing the user at the missing file."""
+    import click
+    with pytest.raises(click.ClickException) as exc:
+        collect_values(str(temp_repo), env="canary")
+    assert "teams.canary.py" in str(exc.value.message)
+
+
+def test_collect_values_unsupported_env_raises(temp_repo):
+    """Only prod/canary are supported (Thrift Environment enum). Anything else
+    must error rather than silently fall back."""
+    import click
+    with pytest.raises(click.ClickException) as exc:
+        collect_values(str(temp_repo), env="staging")
+    assert "staging" in str(exc.value.message)
+
+
 def test_collect_values_with_conf_path(temp_repo, sample_compiled_conf):
     rel_conf = os.path.relpath(sample_compiled_conf, temp_repo)
     values, source = collect_values(str(temp_repo), conf=rel_conf)

@@ -3,7 +3,7 @@ package ai.chronon.api.test.planner
 import ai.chronon.api
 import ai.chronon.api.Builders.{Join, MetaData}
 import ai.chronon.api.planner.{GroupByPlanner, LocalRunner, MonolithJoinPlanner}
-import ai.chronon.api.{Builders, ExecutionInfo, PartitionSpec}
+import ai.chronon.api.{Accuracy, Builders, ExecutionInfo, Operation, PartitionSpec}
 import ai.chronon.planner.{ConfPlan, Mode}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -104,6 +104,37 @@ class MonolithJoinPlannerTest extends AnyFlatSpec with Matchers {
     plan.terminalNodeNames.asScala should contain key ai.chronon.planner.Mode.DEPLOY
     plan.terminalNodeNames.asScala(ai.chronon.planner.Mode.BACKFILL) should equal("testJoin__monolith_join")
     plan.terminalNodeNames.asScala(ai.chronon.planner.Mode.DEPLOY) should equal("testJoin__metadata_upload")
+  }
+
+  it should "put the source table first in monolith join dependencies" in {
+    val groupBy = Builders.GroupBy(
+      sources = Seq(Builders.Source.events(Builders.Query(partitionColumn = "ds"), table = "test_namespace.right_table")),
+      keyColumns = Seq("listing_id"),
+      aggregations = Seq(Builders.Aggregation(Operation.COUNT, "event_count", Seq(WindowUtils.Unbounded))),
+      accuracy = Accuracy.TEMPORAL,
+      metaData = MetaData(name = "testGroupBy")
+    )
+
+    val join = Join(
+      metaData = MetaData(name = "testJoin"),
+      left = Builders.Source.events(Builders.Query(partitionColumn = "ds"), table = "test_namespace.left_table"),
+      joinParts = Seq(Builders.JoinPart(groupBy = groupBy)),
+      bootstrapParts = Seq(
+        Builders.BootstrapPart(
+          table = "test_namespace.bootstrap_table",
+          query = Builders.Query(partitionColumn = "ds"),
+          keyColumns = Seq("listing_id")
+        )
+      )
+    )
+
+    val plan = MonolithJoinPlanner(join).buildPlan
+    val backfillNode = plan.nodes.asScala.find(_.content.isSetMonolithJoin).get
+    val depTables = backfillNode.metaData.executionInfo.tableDependencies.asScala.map(_.tableInfo.table)
+
+    depTables should equal(
+      Seq("test_namespace.left_table", "test_namespace.right_table", "test_namespace.bootstrap_table")
+    )
   }
 
   it should "monolith join planner should respect step days from execution info" in {
@@ -527,6 +558,65 @@ class MonolithJoinPlannerTest extends AnyFlatSpec with Matchers {
     // Should have dependency on upstream join's metadata upload
     val upstreamJoinDep = tableDeps.find(_.tableInfo.table.contains("upstream_join__metadata_upload"))
     upstreamJoinDep should be(defined)
+  }
+
+  it should "include upstream join output dependency when the left source is a join source" in {
+    import ai.chronon.api.Builders._
+
+    val upstreamGroupBy = GroupBy(
+      sources = Seq(Source.events(Query(partitionColumn = "ds"), table = "test_namespace.user_listings")),
+      keyColumns = Seq("user_id"),
+      aggregations = Seq(Aggregation(ai.chronon.api.Operation.LAST, "listing_id", Seq(WindowUtils.Unbounded))),
+      accuracy = ai.chronon.api.Accuracy.TEMPORAL,
+      metaData = MetaData(namespace = "test_namespace", name = "upstream_listing_lookup")
+    )
+
+    val upstreamJoin = Join(
+      metaData = MetaData(namespace = "test_namespace", name = "upstream_join"),
+      left = Source.events(Query(partitionColumn = "ds"), table = "test_namespace.left_events"),
+      joinParts = Seq(new ai.chronon.api.JoinPart().setGroupBy(upstreamGroupBy)),
+      bootstrapParts = Seq.empty
+    )
+
+    val downstreamGroupBy = GroupBy(
+      sources = Seq(Source.events(Query(partitionColumn = "ds"), table = "test_namespace.listing_features")),
+      keyColumns = Seq("listing_id"),
+      aggregations = Seq(Aggregation(ai.chronon.api.Operation.LAST, "price", Seq(WindowUtils.Unbounded))),
+      accuracy = ai.chronon.api.Accuracy.TEMPORAL,
+      metaData = MetaData(namespace = "test_namespace", name = "downstream_listing_features")
+    )
+
+    val listingIdColumn = upstreamGroupBy.valueColumns.head
+    val downstreamJoin = Join(
+      metaData = MetaData(name = "downstream_join"),
+      left = Source.joinSource(
+        upstreamJoin,
+        Query(
+          selects = Selects.exprs(
+            "user_id" -> "user_id",
+            "listing_id" -> listingIdColumn,
+            "ts" -> "ts"
+          ),
+          partitionColumn = "ds"
+        )
+      ),
+      joinParts = Seq(new ai.chronon.api.JoinPart().setGroupBy(downstreamGroupBy)),
+      bootstrapParts = Seq.empty
+    )
+
+    val planner = MonolithJoinPlanner(downstreamJoin)
+    val plan = planner.buildPlan
+
+    validateJoinPlan(plan)
+
+    val backfillNode = plan.nodes.asScala.find(_.content.isSetMonolithJoin).get
+    val backfillDeps = backfillNode.metaData.executionInfo.tableDependencies.asScala.map(_.tableInfo.table)
+    backfillDeps should contain(upstreamJoin.metaData.outputTable)
+
+    val metadataUploadNode = plan.nodes.asScala.find(_.content.isSetJoinMetadataUpload).get
+    val metadataDeps = metadataUploadNode.metaData.executionInfo.tableDependencies.asScala.map(_.tableInfo.table)
+    metadataDeps should contain(downstreamGroupBy.metaData.outputTable + "__uploadToKV")
+    metadataDeps should not contain (upstreamJoin.metaData.outputTable + "__metadata_upload")
   }
 
   it should "handle multiple upstream join dependencies correctly" in {

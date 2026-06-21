@@ -19,6 +19,8 @@ object IonPathConfig {
   val UploadFormatKey = "spark.chronon.table_write.upload.format"
   val UploadLocationKey = "spark.chronon.table_write.upload.location"
   val PartitionColumnKey = "spark.chronon.partition.column"
+  val IonWriterPartitionsKey = "spark.chronon.table_writer.ion_writer.partitions"
+  val IonWriterTimeoutKey = "spark.chronon.table_writer.ion_writer.timeout_ms"
   val DefaultPartitionColumn = "ds"
 }
 
@@ -54,8 +56,14 @@ object IonWriter {
     val keyIdx = schema.fieldIndex("key_bytes")
     val valueIdx = schema.fieldIndex("value_bytes")
     val tsIdx = schema.fieldIndex(partitionColumn)
+    val writeDf = configuredPartitions(df) match {
+      case Some(partitions) =>
+        logger.info(s"Repartitioning Ion upload for $dataSetName partition $partitionValue to $partitions partition(s)")
+        df.repartition(partitions)
+      case None => df
+    }
 
-    val written = df.rdd
+    val written = writeDf.rdd
       .mapPartitionsWithIndex((partitionId, iter) =>
         if (!iter.hasNext) Iterator.empty
         else {
@@ -169,5 +177,10 @@ object IonWriter {
       case other =>
         throw new IllegalArgumentException(s"Unsupported partition type: ${other.getClass.getName}")
     }
+  }
+
+  private def configuredPartitions(df: DataFrame): Option[Int] = {
+    val conf = df.sparkSession.conf
+    conf.getOption(IonPathConfig.IonWriterPartitionsKey).map(_.toInt)
   }
 }

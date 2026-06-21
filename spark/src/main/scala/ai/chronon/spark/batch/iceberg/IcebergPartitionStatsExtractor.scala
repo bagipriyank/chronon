@@ -19,6 +19,11 @@ import scala.collection.mutable
 object IcebergPartitionStatsExtractor {
   type PartitionKey = List[(String, String)]
 
+  case class IcebergPartitionStatsResult(
+      tileSummaries: Map[TileSummaryKey, TileSummary],
+      partitionRowCounts: Map[PartitionKey, Long]
+  )
+
   def extractPartitionMillisFromSlice(slice: String, partitionSpec: PartitionSpec): Long = {
     // Parse hive-style partition string (e.g., "day=2024-01-15/hour=00") to extract partition value
     val partitionPairs = slice
@@ -179,7 +184,7 @@ class PartitionAccumulator(
 }
 
 class IcebergPartitionStatsExtractor(spark: SparkSession) {
-  import IcebergPartitionStatsExtractor.PartitionKey
+  import IcebergPartitionStatsExtractor.{IcebergPartitionStatsResult, PartitionKey}
 
   private def loadIcebergTable(fullTableName: String): Option[org.apache.iceberg.Table] = {
     try {
@@ -208,78 +213,91 @@ class IcebergPartitionStatsExtractor(spark: SparkSession) {
 
   def extractPartitionedStats(fullTableName: String, confName: String)(implicit
       partitionSpec: PartitionSpec): Option[Map[TileSummaryKey, TileSummary]] = {
+    extractPartitionStatsWithRowCounts(fullTableName, confName).map(_.tileSummaries)
+  }
+
+  def extractPartitionStatsWithRowCounts(fullTableName: String, confName: String)(implicit
+      partitionSpec: PartitionSpec): Option[IcebergPartitionStatsResult] = {
     loadIcebergTable(fullTableName).flatMap { table =>
       val tableSpec = Option(table.spec())
 
-      if (tableSpec.isEmpty || !tableSpec.get.isPartitioned) {
-        return None
+      if (tableSpec.isEmpty) {
+        None
+      } else if (!tableSpec.get.isPartitioned) {
+        IcebergClusteredStatsExtractor.extractWithRowCounts(fullTableName, table, confName)
+      } else {
+        val partitionAccumulators = buildPartitionAccumulators(table, confName)
+        Some(resultFromAccumulators(partitionAccumulators))
       }
+    }
+  }
 
-      val currentSnapshot = Option(table.currentSnapshot())
+  private def buildPartitionAccumulators(table: org.apache.iceberg.Table, confName: String)(implicit
+      partitionSpec: PartitionSpec): mutable.Map[PartitionKey, PartitionAccumulator] = {
+    val partitionAccumulators = mutable.Map[PartitionKey, PartitionAccumulator]()
+    val currentSnapshot = Option(table.currentSnapshot())
 
-      val partitionAccumulators = mutable.Map[PartitionKey, PartitionAccumulator]()
+    currentSnapshot.foreach { snapshot =>
+      val manifestFiles = snapshot.allManifests(table.io()).asScala
+      manifestFiles.foreach { manifestFile =>
+        val manifestReader = ManifestFiles.read(manifestFile, table.io())
 
-      currentSnapshot.foreach { snapshot =>
-        val manifestFiles = snapshot.allManifests(table.io()).asScala
-        manifestFiles.foreach { manifestFile =>
-          val manifestReader = ManifestFiles.read(manifestFile, table.io())
+        try {
+          manifestReader.forEach((file: DataFile) => {
 
-          try {
-            manifestReader.forEach((file: DataFile) => {
+            val rowCount: Long = file.recordCount()
+            val schema = Option(table.schema())
+              .getOrElse(throw new IllegalStateException("Table schema is null"))
+            val specs = Option(table.specs())
+              .getOrElse(throw new IllegalStateException("Table specs is null"))
+            val icebergPartitionSpec: org.apache.iceberg.PartitionSpec = Option(specs.get(file.specId()))
+              .getOrElse(throw new IllegalStateException(s"Partition spec not found for specId: ${file.specId()}"))
+            val partitionFieldIds = Option(icebergPartitionSpec.fields())
+              .map(_.asScala.map(_.sourceId()).toSet)
+              .getOrElse(Set.empty[Int])
 
-              val rowCount: Long = file.recordCount()
-              val schema = Option(table.schema())
-                .getOrElse(throw new IllegalStateException("Table schema is null"))
-              val specs = Option(table.specs())
-                .getOrElse(throw new IllegalStateException("Table specs is null"))
-              val icebergPartitionSpec: org.apache.iceberg.PartitionSpec = Option(specs.get(file.specId()))
-                .getOrElse(throw new IllegalStateException(s"Partition spec not found for specId: ${file.specId()}"))
-              val partitionFieldIds = Option(icebergPartitionSpec.fields())
-                .map(_.asScala.map(_.sourceId()).toSet)
-                .getOrElse(Set.empty[Int])
+            // Extract partition key using Iceberg's partitionToPath which properly formats all types
+            val partition = Option(file.partition())
+              .getOrElse(throw new IllegalStateException("File partition data is null"))
+            val partitionPath = icebergPartitionSpec.partitionToPath(partition)
 
-              // Extract partition key using Iceberg's partitionToPath which properly formats all types
-              val partition = Option(file.partition())
-                .getOrElse(throw new IllegalStateException("File partition data is null"))
-              val partitionPath = icebergPartitionSpec.partitionToPath(partition)
-
-              val partitionColToValue: PartitionKey = partitionPath
-                .split("/")
-                .map { pair =>
-                  val parts = pair.split("=", 2)
-                  if (parts.length == 2) {
-                    parts(0) -> parts(1)
-                  } else {
-                    throw new IllegalStateException(s"Invalid partition format: $pair in path $partitionPath")
-                  }
+            val partitionColToValue: PartitionKey = partitionPath
+              .split("/")
+              .map { pair =>
+                val parts = pair.split("=", 2)
+                if (parts.length == 2) {
+                  parts(0) -> parts(1)
+                } else {
+                  throw new IllegalStateException(s"Invalid partition format: $pair in path $partitionPath")
                 }
-                .toList
+              }
+              .toList
 
-              // Extract column statistics for this file
-              val columnStats = extractColumnStats(file, schema, partitionFieldIds)
+            // Extract column statistics for this file
+            val columnStats = extractColumnStats(file, schema, partitionFieldIds)
 
-              // Get or create partition accumulator and add file stats
-              val accumulator = partitionAccumulators.getOrElseUpdate(
-                partitionColToValue,
-                new PartitionAccumulator(partitionColToValue, confName, schema)
-              )
-              accumulator.addFileStats(rowCount, columnStats)
-            })
-          } finally {
-            manifestReader.close()
-          }
+            // Get or create partition accumulator and add file stats
+            val accumulator = partitionAccumulators.getOrElseUpdate(
+              partitionColToValue,
+              new PartitionAccumulator(partitionColToValue, confName, schema)
+            )
+            accumulator.addFileStats(rowCount, columnStats)
+          })
+        } finally {
+          manifestReader.close()
         }
       }
-
-      // Convert accumulators to TileKey -> TileSummary mapping
-      val result = mutable.Map[TileSummaryKey, TileSummary]()
-
-      partitionAccumulators.values.foreach { accumulator =>
-        result ++= accumulator.toTileSummaries
-      }
-
-      Some(result.toMap)
     }
+
+    partitionAccumulators
+  }
+
+  private def resultFromAccumulators(
+      accumulators: mutable.Map[PartitionKey, PartitionAccumulator]
+  ): IcebergPartitionStatsResult = {
+    val tileSummaries = accumulators.values.flatMap(_.toTileSummaries).toMap
+    val rowCounts = accumulators.iterator.map { case (key, acc) => key -> acc.totalRowCount }.toMap
+    IcebergPartitionStatsResult(tileSummaries, rowCounts)
   }
 
   private def extractColumnStats(
@@ -352,7 +370,7 @@ class IcebergPartitionStatsExtractor(spark: SparkSession) {
     columnStatsMap.toMap
   }
 
-  private[iceberg] def convertBoundValue(bound: java.nio.ByteBuffer, fieldType: org.apache.iceberg.types.Type): Any = {
+  private[spark] def convertBoundValue(bound: java.nio.ByteBuffer, fieldType: org.apache.iceberg.types.Type): Any = {
     require(bound != null, "bound cannot be null")
     require(fieldType != null, "fieldType cannot be null")
     org.apache.iceberg.types.Conversions.fromByteBuffer(fieldType, bound)

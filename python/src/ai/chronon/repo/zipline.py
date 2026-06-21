@@ -6,6 +6,7 @@ import click
 from ai.chronon.repo import utils
 from ai.chronon.repo.admin import admin
 from ai.chronon.repo.auth import auth
+from ai.chronon.repo.compare_tables import compare_tables
 from ai.chronon.repo.compile import compile
 from ai.chronon.repo.config import config
 from ai.chronon.repo.hub_runner import hub
@@ -34,6 +35,7 @@ zipline.add_command(run_main)
 zipline.add_command(hub)
 zipline.add_command(admin)
 zipline.add_command(init_agent)
+zipline.add_command(compare_tables)
 
 admin.add_command(init_cmd)
 

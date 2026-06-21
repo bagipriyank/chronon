@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class ChrononServiceLauncherTest {
 
@@ -76,6 +77,63 @@ class ChrononServiceLauncherTest {
         assertEquals("prod", parsed.get("deployment.environment.name"));
         assertEquals("ml", parsed.get("team"));
         assertEquals("us-east-1", parsed.get("region"));
+    }
+
+    @Test
+    void duplicateServiceNameDoesNotThrow() {
+        // Micrometer's OtlpConfig uses Collectors.toMap() which throws on duplicate keys.
+        // This test verifies that buildOtlpResourceAttributes deduplicates so the output
+        // is safe to pass to Micrometer without triggering IllegalStateException.
+        Map<String, String> env = new HashMap<>();
+        env.put("OTEL_RESOURCE_ATTRIBUTES", "service.name=ml-default-zipline-hub");
+
+        String result = ChrononServiceLauncher.buildOtlpResourceAttributes("ai.chronon", envOf(env));
+
+        // OTEL_RESOURCE_ATTRIBUTES wins over the default — last-write-wins
+        Map<String, String> parsed = parseAsMicrometerWould(result);
+        assertEquals("ml-default-zipline-hub", parsed.get("service.name"));
+        // Verify no duplicate keys in the raw string
+        long serviceNameCount = java.util.Arrays.stream(result.split(","))
+                .filter(s -> s.trim().startsWith("service.name="))
+                .count();
+        assertEquals(1, serviceNameCount, "Output must not contain duplicate service.name keys");
+    }
+
+    @Test
+    void otelServiceNameOverridesResourceAttributesServiceName() {
+        // OTEL_SERVICE_NAME has highest precedence for service.name
+        Map<String, String> env = new HashMap<>();
+        env.put("OTEL_RESOURCE_ATTRIBUTES", "service.name=from-resource-attrs");
+        env.put("OTEL_SERVICE_NAME", "from-otel-service-name");
+
+        Map<String, String> parsed = parseAsMicrometerWould(
+                ChrononServiceLauncher.buildOtlpResourceAttributes("ai.chronon", envOf(env)));
+
+        assertEquals("from-otel-service-name", parsed.get("service.name"));
+    }
+
+    @Test
+    void valuesContainingEqualsAreKeptIntact() {
+        Map<String, String> env = new HashMap<>();
+        env.put("OTEL_RESOURCE_ATTRIBUTES", "key=val=extra");
+
+        Map<String, String> parsed = parseAsMicrometerWould(
+                ChrononServiceLauncher.buildOtlpResourceAttributes("ai.chronon", envOf(env)));
+
+        assertEquals("val=extra", parsed.get("key"));
+    }
+
+    @Test
+    void entriesWithEmptyKeyOrValueAfterTrimAreRejected() {
+        Map<String, String> env = new HashMap<>();
+        env.put("OTEL_RESOURCE_ATTRIBUTES", "=value, key= , =,valid=ok");
+
+        Map<String, String> parsed = parseAsMicrometerWould(
+                ChrononServiceLauncher.buildOtlpResourceAttributes("ai.chronon", envOf(env)));
+
+        assertEquals("ok", parsed.get("valid"));
+        assertNull(parsed.get(""));
+        assertNull(parsed.get("key"));
     }
 
     @Test

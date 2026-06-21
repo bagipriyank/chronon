@@ -128,6 +128,33 @@ class EksFlinkSubmitterTest extends AnyFlatSpec {
     assertEquals("foo-bar", K8sFlinkSubmitter.sanitizeDeploymentName("--foo-bar--"))
   }
 
+  "parsePodTemplateLabels" should "parse comma-separated key=value pairs" in {
+    val labels = EksFlinkSubmitter.parsePodTemplateLabels(Some("team=ml,tier=streaming,env=prod"))
+    assertEquals("ml", labels("team"))
+    assertEquals("streaming", labels("tier"))
+    assertEquals("prod", labels("env"))
+  }
+
+  it should "keep keys containing dots and slashes" in {
+    val labels = EksFlinkSubmitter.parsePodTemplateLabels(Some("app.kubernetes.io/component=jobmanager"))
+    assertEquals("jobmanager", labels("app.kubernetes.io/component"))
+  }
+
+  it should "return an empty map when the env var is unset or blank" in {
+    assertTrue(EksFlinkSubmitter.parsePodTemplateLabels(None).isEmpty)
+    assertTrue(EksFlinkSubmitter.parsePodTemplateLabels(Some("   ")).isEmpty)
+  }
+
+  it should "skip entries with an empty key or value and trim whitespace" in {
+    val labels = EksFlinkSubmitter.parsePodTemplateLabels(Some("=novalue, nokey , tier = streaming ,valid=ok"))
+    assertEquals(Map("tier" -> "streaming", "valid" -> "ok"), labels)
+  }
+
+  it should "split on the first '=' so values may contain '='" in {
+    val labels = EksFlinkSubmitter.parsePodTemplateLabels(Some("key=val=extra"))
+    assertEquals("val=extra", labels("key"))
+  }
+
   "eksAdditionalFlinkJars" should "resolve jar names against the base path" in {
     val jars = EksFlinkSubmitter.eksAdditionalFlinkJars("s3://my-bucket/libs/")
     EksFlinkSubmitter.EksOnlyAdditionalJarNames.foreach { name =>

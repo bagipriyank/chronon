@@ -1061,11 +1061,18 @@ class TestUpgradeEksServices:
         _upgrade_eks_services("aws", "2.5.0")
 
         assert len(set_image_calls) == len(_EKS_SERVICES)
+        # `kubectl --context X set image deployment/Y container=image:tag ...` —
+        # find the `container=image:tag` arg by pattern rather than index, since
+        # the prepended `--context X` flag shifts positional indices.
         for cmd in set_image_calls:
-            container_image_arg = cmd[4]  # "container=image:tag"
+            container_image_arg = next(arg for arg in cmd if "=ziplineai/" in str(arg))
             assert ":2.5.0" in container_image_arg
         # Check cloud-specific images contain "aws"
-        cloud_specific = [c[4] for c in set_image_calls if "hub" in c[3] or "eval" in c[3]]
+        cloud_specific = [
+            next(a for a in c if "=ziplineai/" in str(a))
+            for c in set_image_calls
+            if any("hub" in str(a) or "eval" in str(a) for a in c)
+        ]
         for arg in cloud_specific:
             assert "aws" in arg
 
@@ -1132,24 +1139,33 @@ class TestUpgradeEksServices:
 class TestUpgradeCommand:
     # --- control-plane subcommand ---
 
+    @patch("ai.chronon.repo.admin._get_current_kube_context", return_value="test-ctx")
     @patch("ai.chronon.repo.admin._upgrade_eks_services")
     @patch("ai.chronon.repo.admin.get_package_version", return_value="1.0.0")
-    def test_upgrade_control_plane_aws_with_release(self, mock_ver, mock_upgrade):
+    def test_upgrade_control_plane_aws_with_release(self, mock_ver, mock_upgrade, mock_ctx):
         runner = CliRunner()
-        result = runner.invoke(admin, ["upgrade", "control-plane", "aws", "--release", "1.4.2"])
+        result = runner.invoke(
+            admin,
+            ["upgrade", "control-plane", "aws", "--release", "1.4.2", "--yes"],
+        )
         assert result.exit_code == 0
         mock_upgrade.assert_called_once_with("aws", "1.4.2")
 
+    @patch("ai.chronon.repo.admin._get_current_kube_context", return_value="test-ctx")
     @patch("ai.chronon.repo.admin._upgrade_eks_services")
     @patch("ai.chronon.repo.admin.get_package_version", return_value="1.0.0")
-    def test_upgrade_control_plane_defaults_to_package_version(self, mock_ver, mock_upgrade):
+    def test_upgrade_control_plane_defaults_to_package_version(self, mock_ver, mock_upgrade, mock_ctx):
         runner = CliRunner()
-        result = runner.invoke(admin, ["upgrade", "control-plane", "aws"])
+        result = runner.invoke(
+            admin,
+            ["upgrade", "control-plane", "aws", "--yes"],
+        )
         assert result.exit_code == 0
         mock_upgrade.assert_called_once_with("aws", "1.0.0")
 
     @patch("ai.chronon.repo.admin._upgrade_eks_services")
     def test_upgrade_control_plane_gcp_rejected(self, mock_upgrade):
+        # cloud check fires before context detection, so no kubectl mock needed
         runner = CliRunner()
         result = runner.invoke(admin, ["upgrade", "control-plane", "gcp"])
         assert result.exit_code != 0
@@ -1159,11 +1175,28 @@ class TestUpgradeCommand:
     @patch("ai.chronon.repo.admin._upgrade_eks_services")
     @patch("ai.chronon.repo.admin.get_package_version", return_value="unknown")
     def test_upgrade_control_plane_unknown_version_no_release_fails(self, mock_ver, mock_upgrade):
+        # release check fires before context detection, so no kubectl mock needed
         runner = CliRunner()
         result = runner.invoke(admin, ["upgrade", "control-plane", "aws"])
         assert result.exit_code != 0
         mock_upgrade.assert_not_called()
         assert "--release" in result.output
+
+    @patch("ai.chronon.repo.admin._get_current_kube_context", return_value="test-ctx")
+    @patch("ai.chronon.repo.admin._upgrade_eks_services")
+    @patch("ai.chronon.repo.admin.get_package_version", return_value="1.0.0")
+    def test_upgrade_control_plane_aborts_on_no(self, mock_ver, mock_upgrade, mock_ctx):
+        # Without --yes, the prompt fires. Sending "n" to stdin aborts before
+        # the upgrade runs.
+        runner = CliRunner()
+        result = runner.invoke(
+            admin,
+            ["upgrade", "control-plane", "aws", "--release", "1.4.2"],
+            input="n\n",
+        )
+        assert result.exit_code != 0
+        mock_upgrade.assert_not_called()
+        assert "Aborted by user" in result.output
 
     # --- data-plane subcommand ---
 
@@ -1173,7 +1206,7 @@ class TestUpgradeCommand:
         result = runner.invoke(admin, [
             "upgrade", "data-plane",
             "compiled/group_bys/aws/dim_listings.v1__0",
-            "--repo", canary,
+            "--chronon-root", canary,
             "--no-use-auth",
         ])
         assert result.exit_code == 0
@@ -1190,7 +1223,7 @@ class TestUpgradeCommand:
             "upgrade", "data-plane",
             "compiled/group_bys/aws/dim_listings.v1__0",
             "compiled/group_bys/aws/dim_merchants.v1__0",
-            "--repo", canary,
+            "--chronon-root", canary,
             "--no-use-auth",
         ])
         assert result.exit_code == 0
@@ -1204,7 +1237,7 @@ class TestUpgradeCommand:
         runner = CliRunner()
         result = runner.invoke(admin, [
             "upgrade", "data-plane",
-            "--repo", canary,
+            "--chronon-root", canary,
             "--no-use-auth",
         ])
         assert result.exit_code != 0

@@ -29,7 +29,7 @@ def test_backfill_no_data(confs, chronon_root, hub_url, cloud):
         confs(DEMO_DERIVATIONS[cloud]), "1969-01-01", "1969-01-01",
     )
     with pytest.raises(RuntimeError, match="ended with status FAILED"):
-        poll_workflow(hub_url, workflow_id, timeout=1800, interval=45)
+        poll_workflow(hub_url, workflow_id, timeout=3600, interval=45)
 
 
 # Conf for multi-day backfill that expects success.

@@ -24,7 +24,7 @@ import ai.chronon.online.fetcher.Fetcher
 import ai.chronon.aggregator.windowing.{FiveMinuteResolution, SawtoothOnlineAggregator}
 import ai.chronon.online.serde.{AvroCodec, AvroConversions, SparkConversions}
 import ai.chronon.spark.Extensions.DataframeOps
-import ai.chronon.spark.GroupByUpload
+import ai.chronon.spark.{GroupByUpload, IonPathConfig}
 import ai.chronon.spark.catalog.TableUtils
 import ai.chronon.spark.submission.SparkSessionBuilder
 import ai.chronon.spark.utils.{DataFrameGen, MockApi, OnlineUtils, SparkTestBase}
@@ -96,6 +96,50 @@ class GroupByUploadTest extends SparkTestBase with Matchers {
         accuracy = Accuracy.TEMPORAL
       )
     GroupByUpload.run(groupByConf, endDs = yesterday)
+  }
+
+  // Regression: an ion upload with no input data must fail, not silently "succeed". uploadDf always
+  // carries the GroupByServingInfoKey meta row, so before the guard the ion writer reported rows=1
+  // and the no-data case passed (only caught on the parquet path). See GroupByUpload zero-row guard.
+  it should "fail an ion upload that produces zero rows" in {
+    val namespace = testNamespace("ion_zero_rows")
+    createDatabase(namespace)
+    tableUtils.sql(s"USE $namespace")
+
+    val eventsTable = "ion_zero_rows_events"
+    val eventSchema = List(
+      Column("user", StringType, 10),
+      Column("views", IntType, 10)
+    )
+    // Data lands on recent partitions; running the upload for an endDs far before any data makes the
+    // snapshot scan empty — mirrors the production "no input data for the requested date" case.
+    val eventDf = DataFrameGen.events(spark, eventSchema, count = 1000, partitions = 18)
+    eventDf.save(s"$namespace.$eventsTable")
+
+    val groupByConf =
+      Builders.GroupBy(
+        sources = Seq(Builders.Source.events(Builders.Query(), table = eventsTable)),
+        keyColumns = Seq("user"),
+        aggregations = Seq(Builders.Aggregation(Operation.SUM, "views", Seq(WindowUtils.Unbounded))),
+        metaData = Builders.MetaData(namespace = namespace, name = "ion_zero_rows_upload"),
+        accuracy = Accuracy.SNAPSHOT
+      )
+
+    val tmpDir = java.nio.file.Files.createTempDirectory("ion_zero_rows").toString
+    val prevFormat = spark.conf.getOption(IonPathConfig.UploadFormatKey)
+    val prevLocation = spark.conf.getOption(IonPathConfig.UploadLocationKey)
+    spark.conf.set(IonPathConfig.UploadFormatKey, "ion")
+    spark.conf.set(IonPathConfig.UploadLocationKey, s"file://$tmpDir")
+    try {
+      val ex = intercept[RuntimeException] {
+        GroupByUpload.run(groupByConf, endDs = "1970-01-01")
+      }
+      ex.getMessage should include("zero rows")
+    } finally {
+      prevFormat.fold(spark.conf.unset(IonPathConfig.UploadFormatKey))(spark.conf.set(IonPathConfig.UploadFormatKey, _))
+      prevLocation.fold(spark.conf.unset(IonPathConfig.UploadLocationKey))(
+        spark.conf.set(IonPathConfig.UploadLocationKey, _))
+    }
   }
 
   it should "struct support" in {
@@ -232,19 +276,26 @@ class GroupByUploadTest extends SparkTestBase with Matchers {
       Column("list_event", StringType, 100, nullRate = 0.0), // never null
       Column("views", IntType, 10,  nullRate = 0.0), // never null
     )
-    // High count ensures every user has events in every 1-day sub-window. With 10 users and 18
-    // partitions, Window(1, DAYS) collapses to tailHops-only; P(a user has no events in the last
-    // day) = (17/18)^(count/10), so count=10000 makes that probability ~10^-24.
-    val eventDf = DataFrameGen.events(spark, eventSchema, count = 10000, partitions = 18)
+    val eventDf = DataFrameGen.events(spark, eventSchema, count = 1000, partitions = 18)
+    import org.apache.spark.sql.functions.{col, lit}
+    val guaranteedRecentDf = eventDf
+      .select("user")
+      .distinct()
+      .withColumn("list_event", lit("recent-list-event"))
+      .withColumn("views", lit(1))
+      .withColumn("ts", lit(tableUtils.partitionSpec.epochMillis(today) - 1L))
+      .withColumn(tableUtils.partitionColumn, lit(yesterday))
+      .select(eventDf.columns.map(col): _*)
+    val eventDfWithRecentRows = eventDf.unionByName(guaranteedRecentDf)
 
     // Check the input data is as expected
-    eventDf.show(10, truncate = false)
-    val listEventNullCount = eventDf.filter("list_event IS NULL").count()
-    val viewsNullCount = eventDf.filter("views IS NULL").count()
+    eventDfWithRecentRows.show(10, truncate = false)
+    val listEventNullCount = eventDfWithRecentRows.filter("list_event IS NULL").count()
+    val viewsNullCount = eventDfWithRecentRows.filter("views IS NULL").count()
     listEventNullCount shouldBe 0
     viewsNullCount shouldBe 0
 
-    eventDf.save(s"$namespace.$eventsTable")
+    eventDfWithRecentRows.save(s"$namespace.$eventsTable")
 
     val aggregations: Seq[Aggregation] = Seq(
       Builders.Aggregation(Operation.LAST_K, "list_event", Seq(new Window(18, TimeUnit.DAYS)), argMap = Map("k" -> "30")),
@@ -710,7 +761,7 @@ class GroupByUploadTest extends SparkTestBase with Matchers {
     transactionsDf.show()
 
     val userTransactionsGroupBy = Builders.GroupBy(
-      metaData = Builders.MetaData(namespace = namespace, name = "user_transactions"),
+      metaData = Builders.MetaData(namespace = namespace, name = "user_transactions", online = true),
       sources = Seq(
         Builders.Source.events(
           Builders.Query(selects = Builders.Selects("user_id", "price", "discount", "quantity", "ts")),
@@ -787,6 +838,14 @@ class GroupByUploadTest extends SparkTestBase with Matchers {
 
     val user2DiscountRate = user2Response.values.get("discount_rate").asInstanceOf[java.math.BigDecimal]
     math.abs(user2DiscountRate.doubleValue() - 0.0996) should be < 0.0001
+
+    // /v1/groupby/:name/schema must resolve from the batch GroupByServingInfo alone: serve() above ran a
+    // real GroupByUpload and bulk-loaded the batch dataset without writing the conf to CHRONON_METADATA,
+    // which is the production setup that previously broke fetchGroupBySchema.
+    val schema = fetcher.fetchGroupBySchema("user_transactions").get
+    schema.groupByName shouldBe "user_transactions"
+    AvroCodec.of(schema.keySchema).fieldNames.toSet shouldBe Set("user_id")
+    AvroCodec.of(schema.valueSchema).fieldNames.toSet shouldBe Set("net_price", "discount_rate")
   }
 }
 

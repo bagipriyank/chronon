@@ -39,7 +39,7 @@ object FlexibleExecutionContext {
     }
   }
 
-  lazy val buildExecutor: ThreadPoolExecutor = {
+  def buildExecutor(metricsContext: Metrics.Context): ThreadPoolExecutor = {
     val cores = Runtime.getRuntime.availableProcessors()
     new InstrumentedThreadPoolExecutor(
       cores * 4, // corePoolSize
@@ -47,9 +47,17 @@ object FlexibleExecutionContext {
       600, // keepAliveTime
       TimeUnit.SECONDS, // keep alive time units
       new ArrayBlockingQueue[Runnable](10000),
-      threadFactory
+      threadFactory,
+      metricsContext = metricsContext
     )
   }
 
+  lazy val buildExecutor: ThreadPoolExecutor =
+    buildExecutor(InstrumentedThreadPoolExecutor.DefaultMetricsContext)
+
   def buildExecutionContext: ExecutionContextExecutor = ExecutionContext.fromExecutor(buildExecutor)
+
+  /** Creates a fresh executor for callers that need non-default threadpool metric ownership. */
+  def buildExecutionContext(metricsContext: Metrics.Context): ExecutionContextExecutor =
+    ExecutionContext.fromExecutor(buildExecutor(metricsContext))
 }

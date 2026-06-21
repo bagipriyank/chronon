@@ -55,9 +55,10 @@ class JoinPlanner(join: Join)(implicit outputPartitionSpec: PartitionSpec)
     // bootstrap tables follow the standard naming convention: outputTable + "_bootstrap"
     val bootstrapNodeName = join.metaData.name + "_bootstrap"
 
-    val tableDeps = bootstrapParts.toScala.map { bp =>
+    val bootstrapDeps = bootstrapParts.toScala.map { bp =>
       TableDependencies.fromTable(bp.table, bp.query)
-    }.toSeq :+ TableDependencies.fromTable(leftSourceNode.metaData.outputTable)
+    }.toSeq
+    val tableDeps = TableDependencies.fromTable(leftSourceNode.metaData.outputTable) +: bootstrapDeps
 
     val metaData = MetaDataUtils.layer(
       join.metaData,
@@ -134,14 +135,14 @@ class JoinPlanner(join: Join)(implicit outputPartitionSpec: PartitionSpec)
     //
     // currently it works out fine, because we shift forward and back in the engine cancelling out the
     // date ranges that need to be scheduled
-    val deps = joinPartNodes.map { jpNode =>
+    val joinPartDeps = joinPartNodes.map { jpNode =>
       val shouldShift = join.left.dataModel == DataModel.EVENTS &&
         jpNode.content.getJoinPart.joinPart.groupBy.inferredAccuracy == Accuracy.SNAPSHOT
 
       val shiftAmount = if (shouldShift) Some(WindowUtils.Day) else None
       TableDependencies.fromTable(jpNode.metaData.outputTable, shift = shiftAmount)
-    } :+
-      TableDependencies.fromTable(leftTable)
+    }
+    val deps = TableDependencies.fromTable(leftTable) +: joinPartDeps
 
     val mergeNodeName = join.metaData.name + "__merged"
 
@@ -276,12 +277,13 @@ class JoinPlanner(join: Join)(implicit outputPartitionSpec: PartitionSpec)
       // Return both the GroupBy dependency and any upstream join dependencies
       Seq(groupByDep) ++ upstreamJoinDeps
     }
+    val metadataUploadDeps = allDeps
 
     val metaData =
       MetaDataUtils.layer(join.metaData,
                           "metadata_upload",
                           join.metaData.name + "__metadata_upload",
-                          allDeps.toSeq,
+                          metadataUploadDeps.toSeq,
                           Some(stepDays))
     val node = new JoinMetadataUpload().setJoin(joinWithoutExecutionInfo)
 

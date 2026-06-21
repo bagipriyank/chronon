@@ -58,6 +58,11 @@ gcp = Team(
             "FRONTEND_URL": "http://localhost:3000",
             "HUB_URL": "http://localhost:3903",
             "EVAL_URL": "http://localhost:3904",
+            # Sentinel — referenced by test_canary_compile.py to verify that
+            # the prod compile pass uses only this `teams.py` file (never
+            # `teams.canary.py`). Must not appear in any file under
+            # compiled_canary/.
+            "PROD_ONLY_SENTINEL_GCP": "prod-only-sentinel-value-9b8a7c",
         },
         modeEnvironments={
             RunMode.UPLOAD: {
@@ -86,6 +91,16 @@ gcp = Team(
             "spark.driver.cores": "1",
             "spark.executor.memory": "512m",
             "spark.executor.cores": "1",
+
+            # Chronon OTel metrics. Default off + HTTP to localhost:4318. The canary cluster's
+            # Ops Agent listens on the gRPC port (4317), not 4318, so steer the SDK accordingly.
+            "spark.driver.extraJavaOptions": " ".join([
+                "-Dai.chronon.metrics.enabled=true",
+                "-Dai.chronon.metrics.reader=grpc",
+                "-Dai.chronon.metrics.exporter.url=http://localhost:4317",
+            ]),
+            # Sentinel — prod-only conf marker for the test.
+            "spark.chronon.test.prod_only_sentinel": "prod-only-conf-sentinel-4f5a6b",
         },
         modeConfigs={
         }
@@ -96,7 +111,9 @@ gcp = Team(
                 "dataproc.config": generate_dataproc_cluster_config(2, "canary-443022", "gs://zipline-artifacts-canary",
                                                                     idle_timeout="7200s",
                                                                     worker_host_type="n2-highmem-4",
-                                                                    master_host_type="n2-highmem-8")
+                                                                    master_host_type="n2-highmem-8"),
+                # Sentinel — prod-only cluster-conf marker for the test.
+                "prod_only_sentinel_cluster": "prod-only-cluster-sentinel-2e3f4a",
             }
         }
     ),
@@ -281,7 +298,7 @@ azure = Team(
 )
 
 aws_databricks = Team(
-    outputNamespace="data",
+    outputNamespace="workspace_iceberg.poc",
     env=EnvironmentVariables(
         common={
             "CLOUD_PROVIDER": "aws",
@@ -290,10 +307,9 @@ aws_databricks = Team(
             "AWS_REGION": "us-west-2",
             "SPARK_CLUSTER_NAME": "zipline-emr-canary",
             "ARTIFACT_PREFIX": "s3://zipline-artifacts-canary",
-            # TODO: To move warehouse location to canary instead of dev blocked by databricks setup
-            "WAREHOUSE_PREFIX": "s3://zipline-warehouse-dev",
-            "FRONTEND_URL": "http://localhost:3000",
-            "HUB_URL": "http://localhost:3903",
+            "WAREHOUSE_PREFIX": "s3://zipline-warehouse-canary",
+            "FRONTEND_URL": "https://canary-aws.zipline.ai",
+            "HUB_URL": "https://canary-orch-aws.zipline.ai",
         },
     ),
     conf=ConfigProperties(
@@ -327,7 +343,7 @@ aws_databricks = Team(
             "spark.chronon.partition.column": "ds",
             "spark.chronon.partition.format": "yyyy-MM-dd",
 
-            "spark.sql.warehouse.dir": "s3://zipline-warehouse-dev/data/uc-poc/warehouse/",
+            "spark.sql.warehouse.dir": "s3://zipline-warehouse-canary/data/uc-poc/warehouse/",
             "spark.chronon.coalesce.factor": "10",
             "spark.default.parallelism": "10",
             "spark.sql.shuffle.partitions": "10",

@@ -11,13 +11,19 @@ import java.util.concurrent.{
   TimeUnit
 }
 
+object InstrumentedThreadPoolExecutor {
+  val DefaultMetricsContext: Metrics.Context = Metrics.Context(Metrics.Environment.Fetcher).withSuffix("threadpool")
+}
+
 class InstrumentedThreadPoolExecutor(corePoolSize: Int,
                                      maximumPoolSize: Int,
                                      keepAliveTime: Long,
                                      unit: TimeUnit,
                                      workQueue: BlockingQueue[Runnable],
                                      threadFactory: ThreadFactory,
-                                     metricsIntervalSeconds: Int = 15)
+                                     metricsIntervalSeconds: Int = 15,
+                                     protected val metricsContext: Metrics.Context =
+                                       InstrumentedThreadPoolExecutor.DefaultMetricsContext)
     extends ThreadPoolExecutor(
       corePoolSize,
       maximumPoolSize,
@@ -26,8 +32,6 @@ class InstrumentedThreadPoolExecutor(corePoolSize: Int,
       workQueue,
       threadFactory
     ) {
-  protected val metricsContext: Metrics.Context = Metrics.Context(Metrics.Environment.Fetcher).withSuffix("threadpool")
-
   // Reporter for periodic metrics
   private val metricsReporter: ScheduledExecutorService = buildMetricsScheduledExecutor()
 
@@ -60,7 +64,7 @@ class InstrumentedThreadPoolExecutor(corePoolSize: Int,
           metricsContext.gauge("task_count", getTaskCount)
         } catch {
           case e: Exception =>
-            logger.warn(s"Error reporting fetcher threadpool metrics - $e")
+            logger.warn(s"Error reporting threadpool metrics - $e")
         }
       },
       60,

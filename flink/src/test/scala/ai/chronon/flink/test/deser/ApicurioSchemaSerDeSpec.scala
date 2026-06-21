@@ -1,10 +1,10 @@
 package ai.chronon.flink.test.deser
 
-import ai.chronon.api.{IntType, StringType}
+import ai.chronon.api.{Constants, IntType, StringType}
 import ai.chronon.flink.deser.ApicurioSchemaSerDe
 import ai.chronon.flink.deser.ApicurioSchemaSerDe._
 import ai.chronon.online.TopicInfo
-import ai.chronon.online.serde.AvroCodec
+import ai.chronon.online.serde.{AvroCodec, DebeziumMutationMapper}
 import com.google.protobuf.DynamicMessage
 import io.apicurio.registry.rest.client.RegistryClient
 import io.apicurio.registry.rest.client.exception.ArtifactNotFoundException
@@ -451,6 +451,193 @@ class ApicurioSchemaSerDeSpec extends AnyFlatSpec {
     val mutation = serDe.fromBytes(wireBytes)
     assert(mutation.after(0) == "Alice")
     assert(mutation.after(1) == 25)
+  }
+
+  // ============== Debezium Avro tests ==============
+
+  private val debeziumEnvelopeSchemaStr =
+    """{
+      |  "type": "record", "name": "Envelope", "namespace": "test",
+      |  "fields": [
+      |    {"name": "op", "type": "string"},
+      |    {"name": "before", "type": ["null", {
+      |      "type": "record", "name": "Value",
+      |      "fields": [
+      |        {"name": "id",   "type": "int"},
+      |        {"name": "name", "type": ["null", "string"], "default": null}
+      |      ]
+      |    }], "default": null},
+      |    {"name": "after",  "type": ["null", "test.Value"], "default": null},
+      |    {"name": "source", "type": {
+      |      "type": "record", "name": "Source",
+      |      "fields": [{"name": "ts_ms", "type": ["null", "long"], "default": null}]
+      |    }},
+      |    {"name": "ts_ms", "type": ["null", "long"], "default": null}
+      |  ]
+      |}""".stripMargin
+
+  private val debeziumTs = 1710631967915L
+
+  private def makeDebeziumEnvelope(op: String,
+                                   before: org.apache.avro.generic.GenericData.Record,
+                                   after: org.apache.avro.generic.GenericData.Record,
+                                   sourceTsMs: java.lang.Long): Array[Byte] = {
+    val envelopeSchema = AvroCodec.of(debeziumEnvelopeSchemaStr).schema
+    val valueSchema = envelopeSchema.getField("before").schema().getTypes.get(1)
+    val sourceSchema = envelopeSchema.getField("source").schema()
+    val src = new org.apache.avro.generic.GenericData.Record(sourceSchema)
+    src.put("ts_ms", sourceTsMs)
+    val envelope = new org.apache.avro.generic.GenericData.Record(envelopeSchema)
+    envelope.put("op", op)
+    envelope.put("before", before)
+    envelope.put("after", after)
+    envelope.put("source", src)
+    envelope.put("ts_ms", null)
+    AvroCodec.of(debeziumEnvelopeSchemaStr).encodeBinary(envelope)
+  }
+
+  private def makeValueRecord(id: Int, name: String): org.apache.avro.generic.GenericData.Record = {
+    val envelopeSchema = AvroCodec.of(debeziumEnvelopeSchemaStr).schema
+    val valueSchema = envelopeSchema.getField("before").schema().getTypes.get(1)
+    val r = new org.apache.avro.generic.GenericData.Record(valueSchema)
+    r.put("id", id)
+    r.put("name", name)
+    r
+  }
+
+  it should "use DebeziumAvroSerDe when debezium=true and artifact type is AVRO" in {
+    val topicInfo = TopicInfo(
+      "cdc-topic", "kafka",
+      Map(RegistryHostKey -> "localhost", WireFormatKey -> "none",
+          DebeziumMutationMapper.DebeziumKey -> "true"))
+    val mockClient = Mockito.mock(classOf[RegistryClient])
+    when(mockClient.getArtifactMetaData(anyString(), anyString())).thenReturn(makeMetadata(60L, "AVRO"))
+    when(mockClient.getContentByGlobalId(60L)).thenReturn(streamOf(debeziumEnvelopeSchemaStr))
+
+    val serDe = new MockApicurioSchemaSerDe(topicInfo, mockClient)
+    // Schema should be inner record fields + mutation_ts + is_before
+    val fields = serDe.schema.fields
+    assert(fields.exists(_.name == "id"))
+    assert(fields.exists(_.name == "name"))
+    assert(fields.exists(_.name == Constants.MutationTimeColumn))
+    assert(fields.exists(_.name == Constants.ReversalColumn))
+  }
+
+  it should "deserialize a Debezium Avro op=u envelope with wire_format=none" in {
+    val topicInfo = TopicInfo(
+      "cdc-topic", "kafka",
+      Map(RegistryHostKey -> "localhost", WireFormatKey -> "none",
+          DebeziumMutationMapper.DebeziumKey -> "true"))
+    val mockClient = Mockito.mock(classOf[RegistryClient])
+    when(mockClient.getArtifactMetaData(anyString(), anyString())).thenReturn(makeMetadata(61L, "AVRO"))
+    when(mockClient.getContentByGlobalId(61L)).thenReturn(streamOf(debeziumEnvelopeSchemaStr))
+
+    val serDe = new MockApicurioSchemaSerDe(topicInfo, mockClient)
+    val bytes = makeDebeziumEnvelope("u", makeValueRecord(1, "Alice"), makeValueRecord(1, "Alicia"), debeziumTs)
+    val mutation = serDe.fromBytes(bytes)
+
+    assert(mutation.before != null)
+    assert(mutation.after != null)
+    assert(mutation.before(1) == "Alice")
+    assert(mutation.before(3) == (true: java.lang.Boolean))
+    assert(mutation.after(1) == "Alicia")
+    assert(mutation.after(3) == (false: java.lang.Boolean))
+    assert(mutation.after(2) == (debeziumTs: java.lang.Long))
+  }
+
+  it should "deserialize a Debezium Avro op=c envelope with apicurio wire format" in {
+    val mockClient = Mockito.mock(classOf[RegistryClient])
+    when(mockClient.getArtifactMetaData(anyString(), anyString())).thenReturn(makeMetadata(62L, "AVRO"))
+    when(mockClient.getContentByGlobalId(62L)).thenAnswer((_: InvocationOnMock) => streamOf(debeziumEnvelopeSchemaStr))
+
+    val topicInfo = TopicInfo(
+      "cdc-topic", "kafka",
+      Map(RegistryHostKey -> "localhost", WireFormatKey -> "apicurio",
+          DebeziumMutationMapper.DebeziumKey -> "true"))
+    val serDe = new MockApicurioSchemaSerDe(topicInfo, mockClient)
+    val payload = makeDebeziumEnvelope("c", null, makeValueRecord(42, "Bob"), debeziumTs)
+    val wireBytes = buildWireApicurio(62L, payload)
+
+    val mutation = serDe.fromBytes(wireBytes)
+    assert(mutation.before == null)
+    assert(mutation.after != null)
+    assert(mutation.after(1) == "Bob")
+    assert(mutation.after(2) == (debeziumTs: java.lang.Long))
+  }
+
+  it should "throw when debezium=true and artifact type is PROTOBUF" in {
+    val topicInfo = TopicInfo(
+      "cdc-topic", "kafka",
+      Map(RegistryHostKey -> "localhost", DebeziumMutationMapper.DebeziumKey -> "true"))
+    val mockClient = Mockito.mock(classOf[RegistryClient])
+    when(mockClient.getArtifactMetaData(anyString(), anyString())).thenReturn(makeMetadata(63L, "PROTOBUF"))
+    when(mockClient.getContentByGlobalId(63L)).thenReturn(streamOf("""syntax = "proto3"; message X {}"""))
+
+    val serDe = new MockApicurioSchemaSerDe(topicInfo, mockClient)
+    assertThrows[IllegalArgumentException] { serDe.schema }
+  }
+
+  // ============== Debezium JSON tests ==============
+
+  private val debeziumJsonEnvelopeSchemaStr =
+    """{
+      |  "title": "Envelope",
+      |  "type": "object",
+      |  "properties": {
+      |    "op":     {"type": "string"},
+      |    "before": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/Value"}]},
+      |    "after":  {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/Value"}]},
+      |    "source": {"type": "object", "properties": {"ts_ms": {"type": ["integer", "null"]}}},
+      |    "ts_ms":  {"type": ["integer", "null"]}
+      |  },
+      |  "$defs": {
+      |    "Value": {
+      |      "title": "users",
+      |      "type": "object",
+      |      "properties": {
+      |        "id":   {"type": "integer"},
+      |        "name": {"type": ["string", "null"]}
+      |      }
+      |    }
+      |  }
+      |}""".stripMargin
+
+  it should "use DebeziumJsonSerDe when debezium=true and artifact type is JSON" in {
+    val topicInfo = TopicInfo(
+      "cdc-json-topic", "kafka",
+      Map(RegistryHostKey -> "localhost", WireFormatKey -> "none",
+          DebeziumMutationMapper.DebeziumKey -> "true"))
+    val mockClient = Mockito.mock(classOf[RegistryClient])
+    when(mockClient.getArtifactMetaData(anyString(), anyString())).thenReturn(makeMetadata(70L, "JSON"))
+    when(mockClient.getContentByGlobalId(70L)).thenReturn(streamOf(debeziumJsonEnvelopeSchemaStr))
+
+    val serDe = new MockApicurioSchemaSerDe(topicInfo, mockClient)
+    val fields = serDe.schema.fields
+    assert(fields.exists(_.name == "id"))
+    assert(fields.exists(_.name == "name"))
+    assert(fields.exists(_.name == Constants.MutationTimeColumn))
+    assert(fields.exists(_.name == Constants.ReversalColumn))
+  }
+
+  it should "deserialize a Debezium JSON op=d envelope" in {
+    val topicInfo = TopicInfo(
+      "cdc-json-topic", "kafka",
+      Map(RegistryHostKey -> "localhost", WireFormatKey -> "none",
+          DebeziumMutationMapper.DebeziumKey -> "true"))
+    val mockClient = Mockito.mock(classOf[RegistryClient])
+    when(mockClient.getArtifactMetaData(anyString(), anyString())).thenReturn(makeMetadata(71L, "JSON"))
+    when(mockClient.getContentByGlobalId(71L)).thenReturn(streamOf(debeziumJsonEnvelopeSchemaStr))
+
+    val serDe = new MockApicurioSchemaSerDe(topicInfo, mockClient)
+    val payload =
+      s"""{"op":"d","before":{"id":1,"name":"Alice"},"after":null,"source":{"ts_ms":$debeziumTs},"ts_ms":null}"""
+    val mutation = serDe.fromBytes(payload.getBytes("UTF-8"))
+
+    assert(mutation.after == null)
+    assert(mutation.before != null)
+    assert(mutation.before(1) == "Alice")
+    assert(mutation.before(3) == (true: java.lang.Boolean))
+    assert(mutation.before(2) == (debeziumTs: java.lang.Long))
   }
 
   // ============== Proto2 tests ==============

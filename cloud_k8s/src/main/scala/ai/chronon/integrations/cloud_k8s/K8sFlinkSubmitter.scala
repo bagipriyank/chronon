@@ -134,6 +134,12 @@ class K8sFlinkSubmitter(
     base ++ optional
   }
 
+  // Appends the job-name pod label (sanitized GroupBy name) onto constructor-level
+  // podTemplateLabels when provided. The value is sanitized to satisfy K8s label-value
+  // constraints — without this, a long GroupBy name would make the FlinkDeployment invalid.
+  private[cloud_k8s] def buildEffectivePodLabels(groupByName: Option[String]): Map[String, String] =
+    groupByName.fold(podTemplateLabels)(name => podTemplateLabels + (JobNamePodLabel -> sanitizeLabelValue(name)))
+
   def buildFlinkConfiguration(flinkCheckpointUri: String, jobProperties: Map[String, String]): Map[String, String] = {
     val tier = parseTmMemoryTier(jobProperties)
 
@@ -276,7 +282,8 @@ class K8sFlinkSubmitter(
              serviceAccount: String,
              namespace: String,
              envVars: Map[String, String] = Map.empty,
-             nodeSelector: Map[String, String] = Map.empty): String = {
+             nodeSelector: Map[String, String] = Map.empty,
+             groupByName: Option[String] = None): String = {
 
     val deploymentName = sanitizeDeploymentName(s"flink-$jobId")
     val basePath = maybeFlinkJarsUri.getOrElse(defaultJarsBasePath)
@@ -288,6 +295,7 @@ class K8sFlinkSubmitter(
     val tier = parseTmMemoryTier(jobProperties)
 
     val flinkConfiguration = buildFlinkConfiguration(flinkCheckpointUri, jobProperties)
+    val effectivePodLabels = buildEffectivePodLabels(groupByName)
 
     val spec = new java.util.HashMap[String, Object]()
     spec.put("image", flinkImage)
@@ -333,7 +341,8 @@ class K8sFlinkSubmitter(
         allEnvVars,
         containerSpec.volumeMounts,
         containerSpec.volumes,
-        nodeSelector = nodeSelector
+        nodeSelector = nodeSelector,
+        labels = effectivePodLabels
       )
     )
     spec.put(
@@ -346,7 +355,8 @@ class K8sFlinkSubmitter(
         allEnvVars,
         containerSpec.volumeMounts,
         containerSpec.volumes,
-        nodeSelector = nodeSelector
+        nodeSelector = nodeSelector,
+        labels = effectivePodLabels
       )
     )
 
@@ -481,7 +491,8 @@ class K8sFlinkSubmitter(
       envVars: java.util.List[java.util.Map[String, String]],
       volumeMounts: java.util.List[java.util.Map[String, String]],
       volumes: java.util.List[java.util.Map[String, Object]],
-      nodeSelector: Map[String, String] = Map.empty): java.util.Map[String, Object] = {
+      nodeSelector: Map[String, String] = Map.empty,
+      labels: Map[String, String] = podTemplateLabels): java.util.Map[String, Object] = {
     val component = new java.util.HashMap[String, Object]()
 
     val resource = new java.util.HashMap[String, Object]()
@@ -518,9 +529,9 @@ class K8sFlinkSubmitter(
         m
       }
     )
-    if (podTemplateLabels.nonEmpty) {
+    if (labels.nonEmpty) {
       val labelsMap = new java.util.HashMap[String, String]()
-      podTemplateLabels.foreach { case (k, v) => labelsMap.put(k, v) }
+      labels.foreach { case (k, v) => labelsMap.put(k, v) }
       podMeta.put("labels", labelsMap)
     }
 
@@ -548,6 +559,41 @@ object K8sFlinkSubmitter {
 
   // How long a deployment may stay in a non-STABLE pending state before we declare it failed.
   val DeploymentPendingTimeout: Duration = Duration(10, TimeUnit.MINUTES)
+
+  // Pod label identifying the Flink job name (= GroupBy metadata name). Namespaced per K8s
+  // conventions; surfaced to monitoring backends via additional_pod_labels_as_tags (Datadog).
+  // Matches Flink's built-in `job_name` metric tag so dashboards can correlate infra metrics
+  // (CPU, memory — kubelet-collected, tagged via this pod label) with Flink-emitted app
+  // metrics (throughput, backpressure — already tagged with `job_name` by Flink natively).
+  val JobNamePodLabel: String = "chronon/job_name"
+
+  // K8s label-value max length (https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set).
+  val MaxLabelValueLength: Int = 63
+
+  /** Coerces an arbitrary string into a valid Kubernetes label value:
+    *   - Allowed chars: [A-Za-z0-9_]   (also safe for Prometheus label values)
+    *   - Must start/end with alphanumeric
+    *   - Length ≤ 63
+    *
+    * When the input exceeds the length limit, the tail is replaced with an 8-char hex hash
+    * of the original input so distinct long names remain distinguishable rather than
+    * collapsing to the same truncated prefix.
+    */
+  def sanitizeLabelValue(raw: String): String = {
+    require(raw.nonEmpty, "GroupBy name must be non-empty")
+    val cleaned = raw
+      .replaceAll("[^A-Za-z0-9_]", "_")
+      .replaceAll("^_+", "")
+      .replaceAll("_+$", "")
+    require(cleaned.nonEmpty, s"GroupBy name '$raw' has no alphanumeric characters")
+
+    if (cleaned.length <= MaxLabelValueLength) cleaned
+    else {
+      val hash = "%08x".format(raw.hashCode)
+      val keep = MaxLabelValueLength - hash.length - 1
+      cleaned.take(keep).replaceAll("_+$", "") + "_" + hash
+    }
+  }
 
   // Flink Kubernetes Operator enforces a 45-char limit on FlinkDeployment names.
   def sanitizeDeploymentName(raw: String): String = {

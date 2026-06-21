@@ -27,7 +27,7 @@ trait SparkModule extends Cross.Module[String] with build.BaseModule {
         .exclude("com.fasterxml.jackson.core" -> "jackson-databind")
         .exclude("com.fasterxml.jackson.core" -> "jackson-annotations"),
       // Vertx web client for KyuubiSubmitter HTTP calls
-      mvn"io.vertx:vertx-web-client:4.5.24",
+      mvn"io.vertx:vertx-web-client:4.5.27",
     )
   
   // Single test module for all Spark tests

@@ -1,0 +1,87 @@
+---
+__schema__.default.atlas_cc_claim:
+  - [id, string]
+  - [claim_number, string]
+  - [record_begin_timestamp, timestamp]
+  - [record_end_timestamp, timestamp]
+  - [retired, int]
+  - [ds, string]
+
+default.atlas_cc_claim:
+  - ["claim_1", "CLM-001", !epoch 2025-01-10T09:00:00Z, !epoch 2025-01-20T09:00:00Z, 0, "2025-01-10"]
+  - ["claim_1", "CLM-001", !epoch 2025-01-20T09:00:00Z, null, 0, "2025-01-20"]
+  - ["claim_2", "CLM-002", !epoch 2025-01-20T09:00:00Z, null, 0, "2025-01-20"]
+  - ["claim_3", "CLM-003", !epoch 2025-01-20T09:00:00Z, null, 0, "2025-01-20"]
+  - ["claim_4", "CLM-004", !epoch 2025-01-10T09:00:00Z, !epoch 2025-01-20T09:00:00Z, 0, "2025-01-10"]
+  - ["claim_4", "CLM-004", !epoch 2025-01-20T09:00:00Z, null, 0, "2025-01-20"]
+  - ["claim_5", "CLM-005", !epoch 2025-01-20T09:00:00Z, null, 0, "2025-01-20"]
+  - ["claim_6", "CLM-006", !epoch 2025-01-20T09:00:00Z, null, 0, "2025-01-20"]
+  - ["claim_retired", "CLM-RET", !epoch 2025-01-20T09:00:00Z, null, 1, "2025-01-20"]
+
+__schema__.default.atlas_cc_claimcontact:
+  - [id, string]
+  - [contactid, string]
+  - [claimid, string]
+  - [record_begin_timestamp, timestamp]
+  - [record_end_timestamp, timestamp]
+  - [retired, int]
+  - [ds, string]
+
+default.atlas_cc_claimcontact:
+  # One day after the initial contact versions so strict SCD2 bounds can observe
+  # DOB as of the claim-contact link timestamp.
+  - ["cc_1_minor_before_spine", "contact_minor_before_spine", "claim_1", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+  - ["cc_1_minor_after_spine", "contact_minor_after_spine", "claim_1", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+  - ["cc_1_stable_adult", "contact_stable_adult", "claim_1", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+  - ["cc_2_minor_after_spine", "contact_minor_after_spine", "claim_2", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+  - ["cc_3_minor_a", "contact_count_minor_a", "claim_3", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+  - ["cc_3_minor_b", "contact_count_minor_b", "claim_3", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+  - ["cc_3_retired_minor", "contact_count_retired_minor", "claim_3", !epoch 2025-01-02T00:00:00Z, null, 1, "2025-01-02"]
+
+  # Counts before the link closes and stops counting after record_end_timestamp.
+  - ["cc_4_ended_minor", "contact_ended_minor", "claim_4", !epoch 2025-01-02T00:00:00Z, !epoch 2025-01-15T00:00:00Z, 0, "2025-01-02"]
+
+  # Active claim-contact rows whose contact should not count.
+  - ["cc_5_retired_contact", "contact_retired_minor", "claim_5", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+  - ["cc_6_null_dob", "contact_null_dob", "claim_6", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+  - ["cc_6_missing_contact", "contact_missing_row", "claim_6", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+
+  # Would count if the claim itself were not retired.
+  - ["cc_retired_claim_minor", "contact_retired_claim_minor", "claim_retired", !epoch 2025-01-02T00:00:00Z, null, 0, "2025-01-02"]
+
+__schema__.default.atlas_cc_contact:
+  - [id, string]
+  - [dateofbirth, string]
+  - [record_begin_timestamp, timestamp]
+  - [record_end_timestamp, timestamp]
+  - [retired, int]
+  - [ds, string]
+
+default.atlas_cc_contact:
+  # Adult at claim-contact link time, corrected to a minor before claim_1's first spine row.
+  - ["contact_minor_before_spine", "2000-01-01", !epoch 2025-01-01T00:00:00Z, !epoch 2025-01-05T00:00:00Z, 0, "2025-01-01"]
+  - ["contact_minor_before_spine", "2010-01-01", !epoch 2025-01-05T00:00:00Z, null, 0, "2025-01-05"]
+
+  # Minor at claim-contact link time, corrected to an adult after claim_1's first spine row
+  # and before claim_1/claim_2's second spine row.
+  - ["contact_minor_after_spine", "2010-01-01", !epoch 2025-01-01T00:00:00Z, !epoch 2025-01-15T00:00:00Z, 0, "2025-01-01"]
+  - ["contact_minor_after_spine", "2000-01-01", !epoch 2025-01-15T00:00:00Z, null, 0, "2025-01-15"]
+
+  - ["contact_stable_adult", "1980-01-01", !epoch 2025-01-01T00:00:00Z, null, 0, "2025-01-01"]
+  - ["contact_count_minor_a", "2011-01-01", !epoch 2025-01-01T00:00:00Z, null, 0, "2025-01-01"]
+  - ["contact_count_minor_b", "2012-01-01", !epoch 2025-01-01T00:00:00Z, null, 0, "2025-01-01"]
+  - ["contact_count_retired_minor", "2013-01-01", !epoch 2025-01-01T00:00:00Z, null, 0, "2025-01-01"]
+  - ["contact_ended_minor", "2010-01-01", !epoch 2025-01-01T00:00:00Z, null, 0, "2025-01-01"]
+  - ["contact_retired_minor", "2010-01-01", !epoch 2025-01-01T00:00:00Z, null, 1, "2025-01-01"]
+  - ["contact_null_dob", null, !epoch 2025-01-01T00:00:00Z, null, 0, "2025-01-01"]
+  - ["contact_retired_claim_minor", "2010-01-01", !epoch 2025-01-01T00:00:00Z, null, 0, "2025-01-01"]
+
+__expected__.data.azure_scd2_under18_contacts_under18_contacts_expectations__1:
+  - ["claim_1", "CLM-001", !epoch 2025-01-10T09:00:00Z, 1.0, "2025-01-10"]
+  - ["claim_1", "CLM-001", !epoch 2025-01-20T09:00:00Z, 1.0, "2025-01-20"]
+  - ["claim_2", "CLM-002", !epoch 2025-01-20T09:00:00Z, 1.0, "2025-01-20"]
+  - ["claim_3", "CLM-003", !epoch 2025-01-20T09:00:00Z, 2.0, "2025-01-20"]
+  - ["claim_4", "CLM-004", !epoch 2025-01-10T09:00:00Z, 1.0, "2025-01-10"]
+  - ["claim_4", "CLM-004", !epoch 2025-01-20T09:00:00Z, 0.0, "2025-01-20"]
+  - ["claim_5", "CLM-005", !epoch 2025-01-20T09:00:00Z, 0.0, "2025-01-20"]
+  - ["claim_6", "CLM-006", !epoch 2025-01-20T09:00:00Z, 0.0, "2025-01-20"]

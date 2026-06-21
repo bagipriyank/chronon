@@ -15,6 +15,7 @@ from rich.table import Table
 
 import ai.chronon.cli.compile.parse_teams as parse_teams
 from ai.chronon.cli.formatter import Format, jsonify_exceptions_if_json_format
+from ai.chronon.cli.options import chronon_root_option, env_option, format_option
 from ai.chronon.cli.theme import console
 from gen_thrift.api.ttypes import MetaData, Team
 
@@ -57,11 +58,35 @@ def _resolve_chronon_root(chronon_root: Optional[str]) -> str:
     return found
 
 
-def _load_teams_silent(chronon_root: str) -> Dict[str, Team]:
-    """Load teams.py without the parse_teams console message."""
+def _teams_file_for_env(env: str) -> str:
+    """Map an env name to the teams file basename. Mirrors the convention used
+    by `parse_teams.discover_compile_envs`: prod → teams.py, canary →
+    teams.canary.py. Any other env raises since only those two are supported
+    end-to-end (Thrift `Environment` enum)."""
+    e = (env or parse_teams.PROD_ENV).lower()
+    if e == parse_teams.PROD_ENV:
+        return parse_teams.PROD_TEAMS_FILE
+    if e == parse_teams.CANARY_ENV:
+        return f"teams.{parse_teams.CANARY_ENV}.py"
+    raise click.ClickException(
+        f"Unsupported env '{env}'. Allowed: 'prod', 'canary'."
+    )
+
+
+def _load_teams_silent(chronon_root: str, env: str = "prod") -> Dict[str, Team]:
+    """Load teams.<env>.py (default prod → teams.py) without the parse_teams
+    console message. Caller must have validated chronon_root."""
     if chronon_root not in sys.path:
         sys.path.insert(0, chronon_root)
-    return parse_teams.load_teams(chronon_root, print=False)
+    teams_file_name = _teams_file_for_env(env)
+    teams_path = os.path.join(chronon_root, teams_file_name)
+    if not os.path.exists(teams_path):
+        raise click.ClickException(
+            f"{teams_file_name} not found at {chronon_root}. "
+            f"Drop a sibling teams.canary.py next to teams.py to enable "
+            f"--env canary."
+        )
+    return parse_teams.load_teams(chronon_root, teams_file_name=teams_file_name, print=False)
 
 
 def _flatten_section(
@@ -90,13 +115,13 @@ def _flatten_section(
 
 
 def _merged_execution_info_from_team(
-    team_dict: Dict[str, Team], team_name: str
+    team_dict: Dict[str, Team], team_name: str, teams_file_name: str = "teams.py"
 ) -> MetaData:
     """Run the standard team-merge pipeline and return a MetaData with the
     fully-merged ExecutionInfo (default team + the named team)."""
     if team_name not in team_dict:
         raise click.ClickException(
-            f"Team '{team_name}' not found in teams.py. "
+            f"Team '{team_name}' not found in {teams_file_name}. "
             f"Available teams: {sorted(team_dict.keys())}"
         )
     metadata = MetaData()
@@ -163,16 +188,23 @@ def collect_values(
     chronon_root: str,
     team: Optional[str] = None,
     conf: Optional[str] = None,
+    env: str = "prod",
 ) -> Tuple[Dict[str, str], str]:
     """Return `(values, source_team)` where `values` is the prefixed-key map
     of resolved settings and `source_team` is the team they were resolved
     against.
 
+    `env` picks which teams file to load (prod → teams.py, canary →
+    teams.canary.py), so the same conf-aware inspection works against the
+    canary compile output.
+
     When `--conf` is passed, the compiled conf's executionInfo is layered on
-    *top* of the current teams.py merge (default + the conf's team). This
-    way, new keys added to teams.py after compile time still surface, while
-    any value baked into the conf wins (matching what the runtime sees)."""
-    team_dict = _load_teams_silent(chronon_root)
+    *top* of the current teams.<env>.py merge (default + the conf's team).
+    This way, new keys added to the teams file after compile time still
+    surface, while any value baked into the conf wins (matching what the
+    runtime sees)."""
+    teams_file_name = _teams_file_for_env(env)
+    team_dict = _load_teams_silent(chronon_root, env=env)
 
     if conf:
         execution_info, conf_team = _exec_info_from_conf(chronon_root, conf)
@@ -180,24 +212,27 @@ def collect_values(
         target_team = team or conf_team
         base: Dict[str, str] = {}
         if target_team in team_dict:
-            metadata = _merged_execution_info_from_team(team_dict, target_team)
+            metadata = _merged_execution_info_from_team(team_dict, target_team, teams_file_name)
             base = _flatten_from_metadata(metadata)
-        # Conf snapshot wins over current teams.py for keys present in both.
+        # Conf snapshot wins over current teams.<env>.py for keys in both.
         return {**base, **_flatten_from_dict(execution_info)}, target_team
 
     target = team or parse_teams._DEFAULT_CONF_TEAM
-    metadata = _merged_execution_info_from_team(team_dict, target)
+    metadata = _merged_execution_info_from_team(team_dict, target, teams_file_name)
     return _flatten_from_metadata(metadata), target
 
 
-def collect_values_for_all_teams(chronon_root: str) -> Dict[str, Dict[str, str]]:
-    """Return `{team_name: prefixed_values}` for every team in teams.py.
-    Each team's values are merged with the `default` team, matching what the
-    compiler would emit."""
-    team_dict = _load_teams_silent(chronon_root)
+def collect_values_for_all_teams(
+    chronon_root: str, env: str = "prod"
+) -> Dict[str, Dict[str, str]]:
+    """Return `{team_name: prefixed_values}` for every team in teams.<env>.py.
+    Each team's values are merged with the `default` team from that same
+    teams file, matching what the compiler would emit for that env."""
+    teams_file_name = _teams_file_for_env(env)
+    team_dict = _load_teams_silent(chronon_root, env=env)
     result: Dict[str, Dict[str, str]] = {}
     for team_name in team_dict:
-        metadata = _merged_execution_info_from_team(team_dict, team_name)
+        metadata = _merged_execution_info_from_team(team_dict, team_name, teams_file_name)
         result[team_name] = _flatten_from_metadata(metadata)
     return result
 
@@ -269,21 +304,13 @@ _conf_option = click.option(
         "When set, values come from the conf's merged executionInfo."
     ),
 )
-_chronon_root_option = click.option(
-    "--chronon-root",
-    default=None,
-    envvar="CHRONON_ROOT",
+_chronon_root_option = chronon_root_option(
     help="Path to the Chronon root (containing teams.py). Auto-discovered if omitted.",
 )
-_format_option = click.option(
-    "-f",
-    "--format",
-    "format",
-    default=Format.TEXT,
-    type=click.Choice(Format, case_sensitive=False),
-    show_default=True,
-    help="Output format.",
+_env_option = env_option(
+    help="Which teams file to inspect: 'prod' (teams.py) or 'canary' (teams.canary.py).",
 )
+_format_option = format_option()
 
 
 @click.group(name="config", help="Inspect values defined in the nearest teams.py.")
@@ -297,23 +324,24 @@ def config():
     "all_teams",
     is_flag=True,
     default=False,
-    help="List config for every team in teams.py instead of a single team.",
+    help="List config for every team in the selected teams file instead of a single team.",
 )
 @_team_option
 @_conf_option
 @_chronon_root_option
+@_env_option
 @_format_option
 @jsonify_exceptions_if_json_format
-def list_cmd(all_teams, team, conf, chronon_root, format):
+def list_cmd(all_teams, team, conf, chronon_root, env, format):
     """List all config values for the resolved team (and optional conf)."""
     root = _resolve_chronon_root(chronon_root)
     if all_teams:
         if team or conf:
             raise click.ClickException("--all cannot be combined with --team or --conf.")
-        values_by_team = collect_values_for_all_teams(root)
+        values_by_team = collect_values_for_all_teams(root, env=env)
         _print_all_teams(values_by_team, format)
         return
-    values, source_team = collect_values(root, team=team, conf=conf)
+    values, source_team = collect_values(root, team=team, conf=conf, env=env)
     _print_table(values, source_team, format)
 
 
@@ -322,9 +350,10 @@ def list_cmd(all_teams, team, conf, chronon_root, format):
 @_team_option
 @_conf_option
 @_chronon_root_option
+@_env_option
 @_format_option
 @jsonify_exceptions_if_json_format
-def get_cmd(key, team, conf, chronon_root, format):
+def get_cmd(key, team, conf, chronon_root, env, format):
     """Get a config value by KEY (case-insensitive).
 
     KEY may be the fully-qualified name (e.g. 'env.CUSTOMER_ID') or the bare
@@ -332,7 +361,7 @@ def get_cmd(key, team, conf, chronon_root, format):
     key, all matches are returned.
     """
     root = _resolve_chronon_root(chronon_root)
-    values, source_team = collect_values(root, team=team, conf=conf)
+    values, source_team = collect_values(root, team=team, conf=conf, env=env)
     matches = {k: v for k, v in values.items() if _matches_key(k, key)}
     if format == Format.JSON:
         print(json.dumps({"team": source_team, "key": key, "values": matches}, indent=2, sort_keys=True))

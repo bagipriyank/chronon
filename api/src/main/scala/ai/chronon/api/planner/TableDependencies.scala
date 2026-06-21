@@ -130,17 +130,22 @@ object TableDependencies {
     Option(sources)
       .map(_.toScala.toSeq)
       .getOrElse(Seq.empty)
-      .filter(_.isSetJoinSource)
-      .map { source =>
-        val upstreamJoin = source.getJoinSource.getJoin
-        val upstreamMetadataUploadTable = upstreamJoin.metaData.outputTable + "__metadata_upload"
-        new TableDependency()
-          .setTableInfo(
-            new TableInfo()
-              .setTable(upstreamMetadataUploadTable)
-          )
-          .setStartOffset(WindowUtils.zero())
-          .setEndOffset(WindowUtils.zero())
+      .flatMap { source =>
+        for {
+          joinSourceSource <- Option(source).filter(_.isSetJoinSource).toSeq
+          joinSource <- Option(joinSourceSource.getJoinSource).toSeq
+          upstreamJoin <- Option(joinSource.getJoin).toSeq
+          metaData <- Option(upstreamJoin.metaData).toSeq
+        } yield {
+          val upstreamMetadataUploadTable = metaData.outputTable + "__metadata_upload"
+          new TableDependency()
+            .setTableInfo(
+              new TableInfo()
+                .setTable(upstreamMetadataUploadTable)
+            )
+            .setStartOffset(WindowUtils.zero())
+            .setEndOffset(WindowUtils.zero())
+        }
       }
   }
 

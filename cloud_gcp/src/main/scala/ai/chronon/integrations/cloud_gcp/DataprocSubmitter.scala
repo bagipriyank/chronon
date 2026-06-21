@@ -732,6 +732,17 @@ class DataprocSubmitter(jobControllerClient: JobControllerClient,
                   ClusterStatus.State.REPAIRING =>
                 logger.info(s"Cluster $clusterName not ready (state: ${cluster.getStatus.getState}).")
                 None
+              case ClusterStatus.State.ERROR =>
+                logger.error(s"Cluster $clusterName is in ERROR state. Details: ${cluster.getStatus.getDetail}")
+                if (cluster.getConfig.getLifecycleConfig.hasIdleDeleteTtl) {
+                  val ttlDuration = cluster.getConfig.getLifecycleConfig.getIdleDeleteTtl.getSeconds
+                  logger.warn(
+                    s"Cluster $clusterName is in ERROR state and cannot be used for job submission. Waiting for it to be deleted with TTL $ttlDuration seconds")
+                  None
+                } else {
+                  throw new IllegalStateException(
+                    s"Cluster $clusterName is in ERROR state and cannot be used for job submission. No idle delete TTL found, manual intervention may be required.")
+                }
               case state =>
                 throw new IllegalStateException(
                   s"Cluster $clusterName is in state $state and cannot be used for job submission.")

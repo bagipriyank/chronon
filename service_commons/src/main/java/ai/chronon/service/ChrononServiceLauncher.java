@@ -20,8 +20,10 @@ import io.vertx.micrometer.VertxPrometheusOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Custom launcher to help configure the Chronon vertx feature service
@@ -147,21 +149,41 @@ public class ChrononServiceLauncher extends Launcher {
     }
 
     // Overload that takes an env lookup function for testability — System.getenv is immutable in-process.
+    // Micrometer does not tolerate duplicate resource attribute keys, so dedupe before passing to OtlpConfig.
+    // Produces a deduplicated, comma-separated key=value string. Precedence (later wins):
+    //   1. service.name=<default>
+    //   2. OTEL_RESOURCE_ATTRIBUTES env var
+    //   3. ai.chronon.metrics.exporter.resources system property
+    //   4. OTEL_SERVICE_NAME env var (overrides service.name)
     static String buildOtlpResourceAttributes(String defaultServiceName, Function<String, String> envLookup) {
-        StringBuilder sb = new StringBuilder("service.name=").append(defaultServiceName);
-        String envResourceAttrs = envLookup.apply("OTEL_RESOURCE_ATTRIBUTES");
-        if (envResourceAttrs != null && !envResourceAttrs.trim().isEmpty()) {
-            sb.append(',').append(envResourceAttrs.trim());
-        }
-        String chrononResourceAttrs = System.getProperty(OtelMetricsReporter.MetricsExporterResourceKey(), "");
-        if (!chrononResourceAttrs.trim().isEmpty()) {
-            sb.append(',').append(chrononResourceAttrs.trim());
-        }
+        LinkedHashMap<String, String> attrs = new LinkedHashMap<>();
+        attrs.put("service.name", defaultServiceName);
+
+        appendParsedAttributes(attrs, envLookup.apply("OTEL_RESOURCE_ATTRIBUTES"));
+        appendParsedAttributes(attrs, System.getProperty(OtelMetricsReporter.MetricsExporterResourceKey(), ""));
+
         String envServiceName = envLookup.apply("OTEL_SERVICE_NAME");
         if (envServiceName != null && !envServiceName.trim().isEmpty()) {
-            sb.append(',').append("service.name=").append(envServiceName.trim());
+            attrs.put("service.name", envServiceName.trim());
         }
-        return sb.toString();
+
+        return attrs.entrySet().stream()
+                .map(e -> e.getKey() + "=" + e.getValue())
+                .collect(Collectors.joining(","));
+    }
+
+    private static void appendParsedAttributes(LinkedHashMap<String, String> attrs, String raw) {
+        if (raw == null || raw.trim().isEmpty()) return;
+        for (String entry : raw.trim().split(",")) {
+            int eq = entry.indexOf('=');
+            if (eq > 0 && eq < entry.length() - 1) {
+                String key = entry.substring(0, eq).trim();
+                String value = entry.substring(eq + 1).trim();
+                if (!key.isEmpty() && !value.isEmpty()) {
+                    attrs.put(key, value);
+                }
+            }
+        }
     }
 
     public static void main(String[] args) {
