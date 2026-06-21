@@ -98,6 +98,9 @@ object CreationUtils {
       ""
     }
 
+    // Fragment order is significant: Spark SQL's CREATE TABLE grammar requires LOCATION to come
+    // after PARTITIONED BY and before TBLPROPERTIES. Keep cloudPathLocation between the partition
+    // and properties fragments if these are ever reordered.
     Seq(createFragment, partitionFragment, cloudPathLocation, propertiesFragment).mkString("\n")
 
   }
