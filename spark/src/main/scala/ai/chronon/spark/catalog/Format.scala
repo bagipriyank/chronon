@@ -34,8 +34,11 @@ trait Format {
     }
     // Parse the identifier here (we have a SparkSession) so the LOCATION subdir uses the real
     // leaf segment even for dotted, backtick-quoted names; CreationUtils can't parse on its own.
+    // Derive the leaf from the original tableName, not creationName: under semanticHash the
+    // create uses a hashed intermediate name but is renamed back to tableName, and the rename
+    // does not move data, so the final table must point at the unhashed `<location>/<table>/`.
     val tableLocationLeaf =
-      if (outputLocation.exists(_.trim.nonEmpty)) Format.parseIdentifier(creationName).lastOption
+      if (outputLocation.exists(_.trim.nonEmpty)) Format.parseIdentifier(tableName).lastOption
       else None
     sparkSession.sql(
       CreationUtils

@@ -294,7 +294,8 @@ object Driver {
 
         partitionSteps.zipWithIndex.foreach { case (stepRange, idx) =>
           logger.info(s"Processing range $stepRange (${idx + 1}/${partitionSteps.length})")
-          UnionJoin.computeJoinAndSave(args.joinConf, stepRange)(tableUtils)
+          UnionJoin.computeJoinAndSave(args.joinConf, stepRange, outputLocation = args.outputLocation.toOption)(
+            tableUtils)
           logger.info(s"Wrote range $stepRange (${idx + 1}/${partitionSteps.length})")
         }
 
