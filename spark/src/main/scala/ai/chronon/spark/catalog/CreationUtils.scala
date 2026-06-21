@@ -48,12 +48,13 @@ object CreationUtils {
       schema
         .filterNot(field => partitionColumns.contains(field.name)))
 
-    val createFragment =
+    val createBody =
       s"""CREATE TABLE IF NOT EXISTS $tableName (
          |    ${noPartitions.toDDL}
-         |)
-         |${usingFragment}
-         |""".stripMargin
+         |)""".stripMargin
+    // Only append the USING line when a provider is set, so the managed path doesn't emit a
+    // trailing blank line that the external path lacks.
+    val createFragment = if (usingFragment.isEmpty) createBody else s"$createBody\n$usingFragment"
 
     val partitionFragment = if (partitionColumns != null && partitionColumns.nonEmpty) {
 
