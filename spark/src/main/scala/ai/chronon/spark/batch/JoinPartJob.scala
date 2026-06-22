@@ -30,7 +30,8 @@ class JoinPartJob(node: JoinPartNode,
                   metaData: MetaData,
                   range: DateRange,
                   showDf: Boolean = false,
-                  alignOutput: Boolean = false)(implicit tableUtils: TableUtils) {
+                  alignOutput: Boolean = false,
+                  outputLocation: Option[String] = None)(implicit tableUtils: TableUtils) {
   @transient lazy val logger: Logger = LoggerFactory.getLogger(getClass)
   implicit val partitionSpec: PartitionSpec = tableUtils.partitionSpec
 
@@ -107,7 +108,7 @@ class JoinPartJob(node: JoinPartNode,
         // Cache join part data into intermediate table
         if (filledDf.isDefined) {
           logger.info(s"Writing to join part table: $partTable for partition range $rightRange")
-          filledDf.get.save(partTable, jobContext.tableProps.toMap)
+          filledDf.get.save(partTable, jobContext.tableProps.toMap, outputLocation = outputLocation)
         } else {
           logger.info(s"Skipping $partTable because no data in computed joinPart.")
         }

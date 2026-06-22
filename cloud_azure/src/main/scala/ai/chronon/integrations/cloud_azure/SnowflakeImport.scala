@@ -292,7 +292,12 @@ class SnowflakeImport(stagingQueryConf: api.StagingQuery, endPartition: String, 
     }
   }
 
-  override def compute(range: PartitionRange, setups: Seq[String], enableAutoExpand: Option[Boolean]): Unit = {
+  // outputLocation (from --output-location) is not honored here: this importer loads from Snowflake
+  // to its own target, not via the generic df.save path. The param exists to match the base.
+  override def compute(range: PartitionRange,
+                       setups: Seq[String],
+                       enableAutoExpand: Option[Boolean],
+                       outputLocation: Option[String]): Unit = {
     val renderedQuery =
       StagingQuery.substitute(
         tableUtils,

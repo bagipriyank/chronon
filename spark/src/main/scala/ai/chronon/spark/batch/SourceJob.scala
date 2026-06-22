@@ -15,7 +15,10 @@ import scala.jdk.CollectionConverters._
 Runs and materializes a `Source` for a given `dateRange`. Used in the Join computation flow to first compute the Source,
 then each join may have a further Bootstrap computation to produce the left side for use in the final join step.
  */
-class SourceJob(node: SourceWithFilterNode, metaData: MetaData, range: DateRange)(implicit tableUtils: TableUtils) {
+class SourceJob(node: SourceWithFilterNode,
+                metaData: MetaData,
+                range: DateRange,
+                outputLocation: Option[String] = None)(implicit tableUtils: TableUtils) {
   @transient lazy val logger: Logger = LoggerFactory.getLogger(getClass)
   private val sourceWithFilter = node
   private val dateRange = range.toPartitionRange(tableUtils.partitionSpec)
@@ -64,7 +67,7 @@ class SourceJob(node: SourceWithFilterNode, metaData: MetaData, range: DateRange
         }
 
         // Save using the provided outputTable or compute one if not provided
-        dfWithTimeCol.save(outputTable, tableProperties = metaData.tableProps)
+        dfWithTimeCol.save(outputTable, tableProperties = metaData.tableProps, outputLocation = outputLocation)
       }
     }
   }

@@ -69,7 +69,12 @@ class BigQueryImport(stagingQueryConf: api.StagingQuery, endPartition: String, t
     multiStatementQuery
   }
 
-  override def compute(range: PartitionRange, setups: Seq[String], enableAutoExpand: Option[Boolean]): Unit = {
+  // outputLocation (from --output-location) is not honored here: this importer exports to its own
+  // BigQuery temp location, not via the generic df.save path. The param exists to match the base.
+  override def compute(range: PartitionRange,
+                       setups: Seq[String],
+                       enableAutoExpand: Option[Boolean],
+                       outputLocation: Option[String]): Unit = {
     // Step 1: Export data for the full range to a temp location
     val renderedQuery =
       StagingQuery.substitute(
