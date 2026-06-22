@@ -20,13 +20,15 @@ object FlinkUtils {
 
   /** Returns allowed lateness in milliseconds for Flink window configuration.
     *
+    * When `allowed_lateness_seconds` is not configured, falls back to `defaultSeconds`.
     * Defaults to 0 when unconfigured or negative to ensure deterministic window-close semantics
     * and avoid undefined watermark behavior. Accepts input from props (preferred) or topicInfo.
     *
+    * @param defaultSeconds fallback lateness in seconds when the property is absent (default 0)
     * @return lateness in milliseconds, clamped to 0 for negative/missing values
     * @throws IllegalArgumentException if value is non-numeric or would overflow
     */
-  def getAllowedLatenessMs(props: Map[String, String], topicInfo: TopicInfo): Long = {
+  def getAllowedLatenessMs(props: Map[String, String], topicInfo: TopicInfo, defaultSeconds: Long = 0L): Long = {
     getProperty("allowed_lateness_seconds", props, topicInfo)
       .map(_.trim)
       .filter(_.nonEmpty)
@@ -46,7 +48,14 @@ object FlinkUtils {
           java.lang.Math.multiplyExact(seconds, 1000L)
         }
       }
-      .getOrElse(0L)
+      .getOrElse {
+        if (defaultSeconds <= 0) 0L
+        else if (defaultSeconds > MaxAllowedLatenessSeconds)
+          throw new IllegalArgumentException(
+            s"FlinkUtils.getAllowedLatenessMs: defaultSeconds $defaultSeconds exceeds maximum ($MaxAllowedLatenessSeconds)"
+          )
+        else java.lang.Math.multiplyExact(defaultSeconds, 1000L)
+      }
   }
 }
 

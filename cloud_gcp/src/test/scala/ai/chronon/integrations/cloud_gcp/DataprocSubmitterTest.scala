@@ -1235,11 +1235,12 @@ class DataprocSubmitterTest extends AnyFlatSpec with MockitoSugar {
     assert(result.isEmpty)
   }
 
-  it should "throw IllegalStateException when cluster is in ERROR state and no config provided" in {
+  it should "throw IllegalStateException when cluster is in ERROR state and no idle delete TTL is set" in {
     val mockClusterControllerClient = mock[ClusterControllerClient]
     val mockCluster = Cluster
       .newBuilder()
       .setStatus(ClusterStatus.newBuilder().setState(ClusterStatus.State.ERROR))
+      .setConfig(ClusterConfig.newBuilder().setLifecycleConfig(LifecycleConfig.newBuilder()))
       .build()
 
     when(mockClusterControllerClient.getCluster(any[String], any[String], any[String]))
@@ -1260,7 +1261,41 @@ class DataprocSubmitterTest extends AnyFlatSpec with MockitoSugar {
       )(scala.concurrent.ExecutionContext.global)
     }
 
-    assert(exception.getMessage.contains("cannot be used for job submission"))
+    assert(exception.getMessage.contains("ERROR state"))
+    assert(exception.getMessage.contains("No idle delete TTL found"))
+  }
+
+  it should "return None when cluster is in ERROR state and idle delete TTL is set" in {
+    val mockClusterControllerClient = mock[ClusterControllerClient]
+    val mockCluster = Cluster
+      .newBuilder()
+      .setStatus(ClusterStatus.newBuilder().setState(ClusterStatus.State.ERROR))
+      .setConfig(
+        ClusterConfig
+          .newBuilder()
+          .setLifecycleConfig(
+            LifecycleConfig
+              .newBuilder()
+              .setIdleDeleteTtl(com.google.protobuf.Duration.newBuilder().setSeconds(600))))
+      .build()
+
+    when(mockClusterControllerClient.getCluster(any[String], any[String], any[String]))
+      .thenReturn(mockCluster)
+
+    val submitterWithClusterClient = new DataprocSubmitter(
+      jobControllerClient = mock[JobControllerClient],
+      gcsClient = mock[GCSClient],
+      region = "test-region",
+      projectId = "test-project",
+      clusterControllerClient = Some(mockClusterControllerClient)
+    )
+
+    val result = submitterWithClusterClient.ensureClusterReady(
+      "test-cluster",
+      None
+    )(scala.concurrent.ExecutionContext.global)
+
+    assert(result.isEmpty)
   }
 
   it should "throw IllegalArgumentException when getOrCreateCluster is called with no config" in {

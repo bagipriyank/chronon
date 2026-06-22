@@ -23,6 +23,19 @@ logger = logging.getLogger(__name__)
 # Config directories that contain .py source files to template.
 _CONFIG_DIRS = ("staging_queries", "group_bys", "joins", "models")
 
+# Additional team-folder names to discover alongside a given cloud. Lets a
+# cloud's test_id rewriting pick up team-specific siblings — e.g. the Unity
+# Catalog `aws_databricks` team lives under canary/{joins,group_bys,
+# staging_queries}/aws_databricks/ but its UC backfill tests run under
+# CLOUD=aws, so the templating needs to copy/clean those alongside aws/*.
+_EXTRA_CLOUD_DIRS: dict[str, tuple[str, ...]] = {
+    "aws": ("aws_databricks",),
+}
+
+
+def _all_cloud_dirs(cloud: str) -> tuple[str, ...]:
+    return (cloud, *_EXTRA_CLOUD_DIRS.get(cloud, ()))
+
 
 # ---------------------------------------------------------------------------
 # Discovery
@@ -31,22 +44,28 @@ _CONFIG_DIRS = ("staging_queries", "group_bys", "joins", "models")
 def _discover_sources(chronon_root: str, cloud: str) -> list[str]:
     """Return all .py config files under *chronon_root*/{config_dir}/*cloud*/.
 
-    Skips ``__init__.py`` files.
+    Skips ``__init__.py`` files. Also includes any team-folder siblings declared
+    in ``_EXTRA_CLOUD_DIRS`` (e.g. ``aws_databricks`` for ``cloud="aws"``).
     """
     sources: list[str] = []
-    for config_dir in _CONFIG_DIRS:
-        pattern = os.path.join(chronon_root, config_dir, cloud, "*.py")
-        sources.extend(
-            p for p in glob.glob(pattern)
-            if os.path.basename(p) != "__init__.py"
-        )
+    for cd in _all_cloud_dirs(cloud):
+        for config_dir in _CONFIG_DIRS:
+            pattern = os.path.join(chronon_root, config_dir, cd, "*.py")
+            sources.extend(
+                p for p in glob.glob(pattern)
+                if os.path.basename(p) != "__init__.py"
+            )
     return sorted(sources)
 
 
 def _collect_py_files(chronon_root: str, cloud: str) -> list[str]:
     """Return all .py config files under *chronon_root* for *cloud*."""
-    pattern = os.path.join(chronon_root, "**", cloud, "*.py")
-    return [p for p in glob.glob(pattern, recursive=True) if os.path.basename(p) != "__init__.py"]
+    files: list[str] = []
+    for cd in _all_cloud_dirs(cloud):
+        pattern = os.path.join(chronon_root, "**", cd, "*.py")
+        files.extend(p for p in glob.glob(pattern, recursive=True)
+                     if os.path.basename(p) != "__init__.py")
+    return files
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +124,23 @@ def _apply_renames(content: str, renames: dict[str, str]) -> str:
     Uses a negative lookbehind for '.' so that attribute access like
     ``exports.user_activities`` is left alone while import-level names
     (``import user_activities``, ``user_activities.v1``) are renamed.
+
+    Lines of the form ``from X.Y.Z import name`` (3+ dotted components
+    in the from-path) are skipped: the imported ``name`` is an attribute
+    of module ``Z``, not a sibling module, so it must not be renamed
+    even if it happens to collide with a known stem.
     """
-    for old, new in sorted(renames.items(), key=lambda kv: len(kv[0]), reverse=True):
-        content = re.sub(rf"(?<!\.)\b{re.escape(old)}\b", new, content)
-    return content
+    sorted_renames = sorted(renames.items(), key=lambda kv: len(kv[0]), reverse=True)
+    out_lines = []
+    for line in content.splitlines(keepends=True):
+        m = re.match(r"^\s*from\s+([\w.]+)\s+import\s+", line)
+        if m and m.group(1).count(".") >= 2:
+            out_lines.append(line)
+            continue
+        for old, new in sorted_renames:
+            line = re.sub(rf"(?<!\.)\b{re.escape(old)}\b", new, line)
+        out_lines.append(line)
+    return "".join(out_lines)
 
 
 def _rewrite_file(path: str, stem_renames: dict[str, str], dest: str = None) -> bool:

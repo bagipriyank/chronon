@@ -3,8 +3,9 @@ package ai.chronon.flink.test
 import ai.chronon.api.Constants.{ReversalColumn, TimeColumn}
 import ai.chronon.api.Extensions.GroupByOps
 import ai.chronon.api.ScalaJavaConversions._
-import ai.chronon.api.GroupBy
+import ai.chronon.api.{GroupBy, TilingUtils}
 import ai.chronon.flink.{FlinkGroupByStreamingJob, SparkExpressionEval, SparkExpressionEvalFn}
+import ai.chronon.flink.types.{TimestampedIR, TimestampedTile, WriteResponse}
 import ai.chronon.online.serde.SparkConversions
 import ai.chronon.online.{Api, GroupByServingInfoParsed, TopicInfo}
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration
@@ -76,13 +77,128 @@ class FlinkJobEntityIntegrationTest extends AnyFlatSpec with BeforeAndAfter {
     mutationFieldsSet shouldBe expectedMutationFieldsSet
   }
 
-  private def buildFlinkJob(groupBy: GroupBy,
-                            elements: Seq[E2ETestMutationEvent]): (FlinkGroupByStreamingJob, GroupByServingInfoParsed) = {
+  // Tile decode helpers — mirrors FlinkJobEventIntegrationTest
+
+  private def avroConvertPutRequestToTimestampedTile(in: WriteResponse,
+                                                     gbInfo: GroupByServingInfoParsed): TimestampedTile = {
+    val tileKey  = TilingUtils.deserializeTileKey(in.keyBytes)
+    val keyBytes = tileKey.keyBytes.toScala.toArray.map(_.asInstanceOf[Byte])
+    val record   = gbInfo.keyCodec.decode(keyBytes)
+    val decodedKeys: List[String] =
+      gbInfo.groupBy.keyColumns.toScala.map(record.get(_).toString)
+    new TimestampedTile(decodedKeys.map(_.asInstanceOf[Any]).toJava, in.valueBytes, in.tsMillis, in.startProcessingTime)
+  }
+
+  private def avroConvertTimestampedTileToTimestampedIR(tile: TimestampedTile,
+                                                        gbInfo: GroupByServingInfoParsed): TimestampedIR = {
+    val tileIR = gbInfo.tiledCodec.decodeTileIr(tile.tileBytes)
+    new TimestampedIR(tileIR._1, Some(tile.latestTsMillis), Some(tile.startProcessingTime), None)
+  }
+
+  // Returns the last-emitted IR per key from a collection of WriteResponses.
+  private def finalIRsPerKey(
+      responses: Seq[WriteResponse],
+      gbInfo: GroupByServingInfoParsed
+  ): Map[Seq[Any], List[Any]] =
+    responses
+      .map { wr =>
+        val tile = avroConvertPutRequestToTimestampedTile(wr, gbInfo)
+        val ir   = avroConvertTimestampedTileToTimestampedIR(tile, gbInfo)
+        (tile.keys, ir.ir.toList, wr.tsMillis)
+      }
+      .groupBy(_._1)
+      .map { case (keys, triples) => (keys.toScala, triples.maxBy(_._3)._2) }
+
+  // ---- Tiled entity integration tests ----
+
+  it should "tiled entity job — create events produce correct IRs" in {
+    implicit val env: StreamExecutionEnvironment = StreamExecutionEnvironment.getExecutionEnvironment
+
+    val elements = Seq(
+      E2ETestMutationEvent("id1", 1, 10.0, 1L, 2L, isBefore = false),
+      E2ETestMutationEvent("id2", 1, 20.0, 3L, 4L, isBefore = false),
+      E2ETestMutationEvent("id3", 1, 30.0, 5L, 6L, isBefore = false)
+    )
+
+    val groupBy = FlinkTestUtils.makeEntityGroupBy(Seq("id"))
+    val (job, gbInfo) = buildFlinkJob(groupBy, elements)
+    job.runTiledGroupByJob(env).addSink(new CollectSink)
+    env.execute("TiledEntityJobCreates")
+
+    val responses = CollectSink.values.toScala
+    responses.forall(_.status) shouldBe true
+
+    val irsByKey = finalIRsPerKey(responses, gbInfo)
+    // Each key has one event → sum equals the double_val
+    irsByKey(List("id1"))(0).asInstanceOf[Double] shouldBe 10.0
+    irsByKey(List("id2"))(0).asInstanceOf[Double] shouldBe 20.0
+    irsByKey(List("id3"))(0).asInstanceOf[Double] shouldBe 30.0
+  }
+
+  it should "tiled entity job — before-only rows produce negative sum (delete from empty)" in {
+    // Verify that isBefore=true events are processed as deletes (subtract from IR).
+    // Three keys each receive a single before-row (delete) with distinct values.
+    // A delete on an empty accumulator results in a negative sum.
+    implicit val env: StreamExecutionEnvironment = StreamExecutionEnvironment.getExecutionEnvironment
+
+    val elements = Seq(
+      E2ETestMutationEvent("id1", 1, 10.0, 1L, 2L, isBefore = true),
+      E2ETestMutationEvent("id2", 1, 20.0, 3L, 4L, isBefore = true),
+      E2ETestMutationEvent("id3", 1, 30.0, 5L, 6L, isBefore = true)
+    )
+
+    val groupBy = FlinkTestUtils.makeEntityGroupBy(Seq("id"))
+    val (job, gbInfo) = buildFlinkJob(groupBy, elements)
+    job.runTiledGroupByJob(env).addSink(new CollectSink)
+    env.execute("TiledEntityJobBeforeOnly")
+
+    val responses = CollectSink.values.toScala
+    responses.forall(_.status) shouldBe true
+
+    val irsByKey = finalIRsPerKey(responses, gbInfo)
+    // A delete on an empty IR subtracts the value
+    irsByKey(List("id1"))(0).asInstanceOf[Double] shouldBe -10.0
+    irsByKey(List("id2"))(0).asInstanceOf[Double] shouldBe -20.0
+    irsByKey(List("id3"))(0).asInstanceOf[Double] shouldBe -30.0
+  }
+
+
+
+
+  // ---- getAllowedLatenessMs tests (no mini-cluster needed) ----
+
+  "FlinkGroupByStreamingJob.getAllowedLatenessMs" should "default to 2 days for entity source with no prop" in {
+    val (job, _) = buildFlinkJob(FlinkTestUtils.makeEntityGroupBy(Seq("id")), Seq.empty)
+    job.getAllowedLatenessMs() shouldBe 2L * 24 * 60 * 60 * 1000
+  }
+
+  it should "default to 0 for event source with no prop" in {
+    val (job, _) = buildFlinkJob(FlinkTestUtils.makeGroupBy(Seq("id")), Seq.empty)
+    job.getAllowedLatenessMs() shouldBe 0L
+  }
+
+  it should "respect explicit allowed_lateness_seconds prop for entity source" in {
+    val (job, _) = buildFlinkJob(FlinkTestUtils.makeEntityGroupBy(Seq("id")), Seq.empty,
+                                 props = Map("allowed_lateness_seconds" -> "3600"))
+    job.getAllowedLatenessMs() shouldBe 3600000L
+  }
+
+  it should "respect explicit allowed_lateness_seconds prop for event source" in {
+    val (job, _) = buildFlinkJob(FlinkTestUtils.makeGroupBy(Seq("id")), Seq.empty,
+                                 props = Map("allowed_lateness_seconds" -> "120"))
+    job.getAllowedLatenessMs() shouldBe 120000L
+  }
+
+  private def buildFlinkJob(
+      groupBy: GroupBy,
+      elements: Seq[E2ETestMutationEvent],
+      props: Map[String, String] = Map.empty,
+      parallelism: Int = 2
+  ): (FlinkGroupByStreamingJob, GroupByServingInfoParsed) = {
     val query = SparkExpressionEval.queryFromGroupBy(groupBy)
     val sparkExpressionEvalFn = new SparkExpressionEvalFn(Encoders.product[E2ETestMutationEvent], query, groupBy.metaData.name, groupBy.dataModel)
     val source = new WatermarkedE2ETestMutationEventSource(elements, sparkExpressionEvalFn)
 
-    // Prepare the Flink Job
     val encoder = Encoders.product[E2ETestMutationEvent]
     val outputSchema = new SparkExpressionEval(encoder, query, groupBy.getMetaData.getName, groupBy.dataModel).getOutputSchema
     val outputSchemaDataTypes = outputSchema.fields.map { field =>
@@ -98,8 +214,8 @@ class FlinkJobEntityIntegrationTest extends AnyFlatSpec with BeforeAndAfter {
                   outputSchemaDataTypes,
                   writerFn,
                   groupByServingInfoParsed,
-                  2,
-                  props = Map.empty,
+                  parallelism,
+                  props = props,
                   topicInfo = topicInfo),
      groupByServingInfoParsed)
   }

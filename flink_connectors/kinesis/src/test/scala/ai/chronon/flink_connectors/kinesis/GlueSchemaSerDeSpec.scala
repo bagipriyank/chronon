@@ -1,7 +1,8 @@
 package ai.chronon.flink_connectors.kinesis
 
-import ai.chronon.api.{IntType, StringType}
+import ai.chronon.api.{Constants, IntType, StringType}
 import ai.chronon.online.TopicInfo
+import ai.chronon.online.serde.{AvroCodec, DebeziumMutationMapper}
 import com.google.protobuf.DynamicMessage
 import io.confluent.kafka.schemaregistry.protobuf.ProtobufSchema
 import org.mockito.Mockito.when
@@ -215,6 +216,30 @@ class GlueSchemaSerDeSpec extends AnyFlatSpec {
     val schema = serDe.schema
     assert(schema != null)
     assert(schema.fields.exists(_.name == "id"))
+  }
+
+  it should "use DebeziumAvroSerDe via LocalSchemaSerDe when debezium=true and LOCAL_SCHEMA_DIR is set" in {
+    val tmpDir = Files.createTempDirectory("glue-local-debezium-test")
+    Files.write(tmpDir.resolve("cdc-schema.avsc"), debeziumEnvelopeSchemaStr.getBytes(StandardCharsets.UTF_8))
+
+    val topicInfo = TopicInfo("cdc-stream", "kinesis", Map(
+      GlueSchemaSerDe.RegistryNameKey -> "test-registry",
+      GlueSchemaSerDe.SchemaNameKey -> "cdc-schema",
+      DebeziumMutationMapper.DebeziumKey -> "true"
+    ))
+
+    val serDe = new MockGlueSchemaSerDeWithLocalDir(topicInfo, tmpDir.toString)
+    val fields = serDe.schema.fields
+    assert(fields.exists(_.name == "id"))
+    assert(fields.exists(_.name == Constants.MutationTimeColumn))
+    assert(fields.exists(_.name == Constants.ReversalColumn))
+
+    val bytes = makeDebeziumEnvelopeBytes("c", None, Some(1), "Alice")
+    val mutation = serDe.fromBytes(bytes)
+    assert(mutation.before == null)
+    assert(mutation.after != null)
+    assert(mutation.after(1) == "Alice")
+    assert(mutation.after(2) == (debeziumTs: java.lang.Long))
   }
 
   // ============== Proto3 Tests ==============
@@ -439,6 +464,164 @@ class GlueSchemaSerDeSpec extends AnyFlatSpec {
     assert(mutation.after != null)
     assert(mutation.after(0) == "test")
     assert(mutation.after(1) == null)
+  }
+
+  // ============== Debezium Tests ==============
+
+  private val debeziumEnvelopeSchemaStr =
+    """{
+      |  "type": "record", "name": "Envelope", "namespace": "test",
+      |  "fields": [
+      |    {"name": "op", "type": "string"},
+      |    {"name": "before", "type": ["null", {
+      |      "type": "record", "name": "Value",
+      |      "fields": [
+      |        {"name": "id",   "type": "int"},
+      |        {"name": "name", "type": ["null", "string"], "default": null}
+      |      ]
+      |    }], "default": null},
+      |    {"name": "after",  "type": ["null", "test.Value"], "default": null},
+      |    {"name": "source", "type": {
+      |      "type": "record", "name": "Source",
+      |      "fields": [{"name": "ts_ms", "type": ["null", "long"], "default": null}]
+      |    }},
+      |    {"name": "ts_ms", "type": ["null", "long"], "default": null}
+      |  ]
+      |}""".stripMargin
+
+  private val debeziumTs = 1710631967915L
+
+  private def makeDebeziumEnvelopeBytes(op: String,
+                                        beforeId: Option[Int],
+                                        afterId: Option[Int],
+                                        name: String): Array[Byte] = {
+    val envelopeSchema = AvroCodec.of(debeziumEnvelopeSchemaStr).schema
+    val valueSchema = envelopeSchema.getField("before").schema().getTypes.get(1)
+    val sourceSchema = envelopeSchema.getField("source").schema()
+    def makeValue(id: Int) = {
+      val r = new org.apache.avro.generic.GenericData.Record(valueSchema)
+      r.put("id", id)
+      r.put("name", name)
+      r
+    }
+    val src = new org.apache.avro.generic.GenericData.Record(sourceSchema)
+    src.put("ts_ms", debeziumTs: java.lang.Long)
+    val envelope = new org.apache.avro.generic.GenericData.Record(envelopeSchema)
+    envelope.put("op", op)
+    envelope.put("before", beforeId.map(makeValue).orNull)
+    envelope.put("after", afterId.map(makeValue).orNull)
+    envelope.put("source", src)
+    envelope.put("ts_ms", null)
+    AvroCodec.of(debeziumEnvelopeSchemaStr).encodeBinary(envelope)
+  }
+
+  it should "use DebeziumAvroSerDe when debezium=true and format is AVRO" in {
+    val topicInfo = TopicInfo("cdc-stream", "kinesis", Map(
+      GlueSchemaSerDe.RegionKey -> "us-east-1",
+      GlueSchemaSerDe.RegistryNameKey -> "test-registry",
+      GlueSchemaSerDe.SchemaNameKey -> "cdc-schema",
+      DebeziumMutationMapper.DebeziumKey -> "true"
+    ))
+    val mockGlueClient = mock[GlueClient]
+    val response = GetSchemaVersionResponse.builder()
+      .dataFormat(DataFormat.AVRO).schemaDefinition(debeziumEnvelopeSchemaStr).build()
+    when(mockGlueClient.getSchemaVersion(any[GetSchemaVersionRequest]())).thenReturn(response)
+
+    val serDe = new MockGlueSchemaSerDe(topicInfo, mockGlueClient)
+    val fields = serDe.schema.fields
+    assert(fields.exists(_.name == "id"))
+    assert(fields.exists(_.name == "name"))
+    assert(fields.exists(_.name == Constants.MutationTimeColumn))
+    assert(fields.exists(_.name == Constants.ReversalColumn))
+  }
+
+  it should "deserialize a Debezium Avro op=u envelope from Glue" in {
+    val topicInfo = TopicInfo("cdc-stream", "kinesis", Map(
+      GlueSchemaSerDe.RegionKey -> "us-east-1",
+      GlueSchemaSerDe.RegistryNameKey -> "test-registry",
+      GlueSchemaSerDe.SchemaNameKey -> "cdc-schema",
+      DebeziumMutationMapper.DebeziumKey -> "true"
+    ))
+    val mockGlueClient = mock[GlueClient]
+    val response = GetSchemaVersionResponse.builder()
+      .dataFormat(DataFormat.AVRO).schemaDefinition(debeziumEnvelopeSchemaStr).build()
+    when(mockGlueClient.getSchemaVersion(any[GetSchemaVersionRequest]())).thenReturn(response)
+
+    val serDe = new MockGlueSchemaSerDe(topicInfo, mockGlueClient)
+    val bytes = makeDebeziumEnvelopeBytes("u", Some(1), Some(1), "Alice")
+    val mutation = serDe.fromBytes(bytes)
+
+    assert(mutation.before != null)
+    assert(mutation.after != null)
+    assert(mutation.before(3) == (true: java.lang.Boolean))
+    assert(mutation.after(3) == (false: java.lang.Boolean))
+    assert(mutation.after(2) == (debeziumTs: java.lang.Long))
+  }
+
+  it should "use DebeziumJsonSerDe when debezium=true and format is JSON" in {
+    val jsonEnvelopeSchema =
+      """{
+        |  "title": "Envelope",
+        |  "type": "object",
+        |  "properties": {
+        |    "op":     {"type": "string"},
+        |    "before": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/Value"}]},
+        |    "after":  {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/Value"}]},
+        |    "source": {"type": "object", "properties": {"ts_ms": {"type": ["integer", "null"]}}},
+        |    "ts_ms":  {"type": ["integer", "null"]}
+        |  },
+        |  "$defs": {
+        |    "Value": {
+        |      "title": "users",
+        |      "type": "object",
+        |      "properties": {
+        |        "id":   {"type": "integer"},
+        |        "name": {"type": ["string", "null"]}
+        |      }
+        |    }
+        |  }
+        |}""".stripMargin
+
+    val topicInfo = TopicInfo("cdc-stream", "kinesis", Map(
+      GlueSchemaSerDe.RegionKey -> "us-east-1",
+      GlueSchemaSerDe.RegistryNameKey -> "test-registry",
+      GlueSchemaSerDe.SchemaNameKey -> "users",
+      DebeziumMutationMapper.DebeziumKey -> "true"
+    ))
+    val mockGlueClient = mock[GlueClient]
+    val response = GetSchemaVersionResponse.builder()
+      .dataFormat(DataFormat.JSON).schemaDefinition(jsonEnvelopeSchema).build()
+    when(mockGlueClient.getSchemaVersion(any[GetSchemaVersionRequest]())).thenReturn(response)
+
+    val serDe = new MockGlueSchemaSerDe(topicInfo, mockGlueClient)
+    val fields = serDe.schema.fields
+    assert(fields.exists(_.name == "id"))
+    assert(fields.exists(_.name == Constants.MutationTimeColumn))
+    assert(fields.exists(_.name == Constants.ReversalColumn))
+
+    val payload = s"""{"op":"c","before":null,"after":{"id":7,"name":"Bob"},"source":{"ts_ms":$debeziumTs},"ts_ms":null}"""
+    val mutation = serDe.fromBytes(payload.getBytes("UTF-8"))
+    assert(mutation.before == null)
+    assert(mutation.after != null)
+    assert(mutation.after(1) == "Bob")
+    assert(mutation.after(2) == (debeziumTs: java.lang.Long))
+  }
+
+  it should "throw when debezium=true and format is PROTOBUF" in {
+    val proto3SchemaStr = """syntax = "proto3"; message X { string f = 1; }"""
+    val topicInfo = TopicInfo("cdc-stream", "kinesis", Map(
+      GlueSchemaSerDe.RegionKey -> "us-east-1",
+      GlueSchemaSerDe.RegistryNameKey -> "test-registry",
+      GlueSchemaSerDe.SchemaNameKey -> "test-schema",
+      DebeziumMutationMapper.DebeziumKey -> "true"
+    ))
+    val mockGlueClient = mock[GlueClient]
+    val response = GetSchemaVersionResponse.builder()
+      .dataFormat(DataFormat.PROTOBUF).schemaDefinition(proto3SchemaStr).build()
+    when(mockGlueClient.getSchemaVersion(any[GetSchemaVersionRequest]())).thenReturn(response)
+
+    val serDe = new MockGlueSchemaSerDe(topicInfo, mockGlueClient)
+    assertThrows[IllegalArgumentException] { serDe.schema }
   }
 
   it should "fail for unknown schema formats" in {

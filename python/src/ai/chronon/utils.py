@@ -34,6 +34,33 @@ ANY_SOURCE_TYPE = Union[
 chronon_root_path = ""  # passed from compile.py
 
 
+def convert_environments_to_enum(environments: List[str]) -> List[int]:
+    """Convert environment strings to enum values with validation.
+
+    Args:
+        environments: List of environment strings ('prod', 'canary', case-insensitive)
+
+    Returns:
+        List of Environment enum integer values
+
+    Raises:
+        ValueError: If any environment string is not 'prod' or 'canary'
+    """
+    env_map = {
+        'prod': api.Environment.PROD,
+        'canary': api.Environment.CANARY,
+    }
+    result = []
+    for env in environments:
+        env_lower = env.lower()
+        if env_lower not in env_map:
+            raise ValueError(
+                f"Invalid environment '{env}'. Must be one of: {list(env_map.keys())}"
+            )
+        result.append(env_map[env_lower])
+    return result
+
+
 def normalize_source(source: ANY_SOURCE_TYPE, output_namespace: str = None) -> api.Source:
     """Convert any source type to a properly wrapped api.Source"""
     if isinstance(source, api.EventSource):
@@ -41,7 +68,8 @@ def normalize_source(source: ANY_SOURCE_TYPE, output_namespace: str = None) -> a
     elif isinstance(source, api.EntitySource):
         return api.Source(entities=source)
     elif isinstance(source, api.JoinSource):
-        __set_name(source.join, api.Join, "joins")
+        if not source.join.metaData.name:
+            __set_name(source.join, api.Join, "joins")
         if output_namespace and not source.join.metaData.outputNamespace:
             source.join.metaData.outputNamespace = output_namespace
         return api.Source(joinSource=source)

@@ -1,0 +1,71 @@
+name: Build and Push Spark Docker Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/spark/Dockerfile'
+      - 'docker/spark/spark-defaults.conf'
+      - 'docker/spark/unitycatalog-*.jar'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Extra tag to publish alongside the commit SHA
+        required: false
+        default: ''
+
+env:
+  IMAGE_NAME: ziplineai/spark
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute tags
+        id: tags
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAGS="${IMAGE_NAME}:${GITHUB_SHA}"
+          if [[ "$EVENT" == "push" ]]; then
+            TAGS="$TAGS,${IMAGE_NAME}:nightly"
+          fi
+          if [[ "$EVENT" == "release" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            TAGS="$TAGS,${IMAGE_NAME}:$VERSION,${IMAGE_NAME}:latest"
+          fi
+          if [[ "$EVENT" == "workflow_dispatch" && -n "$INPUT_TAG" ]]; then
+            if [[ "$INPUT_TAG" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              TAGS="$TAGS,${IMAGE_NAME}:$INPUT_TAG"
+            else
+              echo "::error::Invalid tag '$INPUT_TAG'; allowed chars: A-Za-z0-9._-"
+              exit 1
+            fi
+          fi
+          echo "value=$TAGS" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/spark
+          file: docker/spark/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.tags.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

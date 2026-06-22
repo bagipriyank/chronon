@@ -944,7 +944,8 @@ class EmrServerlessSubmitterTest extends AnyFlatSpec with Matchers with MockitoS
         serviceAccount = org.mockito.ArgumentMatchers.anyString(),
         namespace = org.mockito.ArgumentMatchers.anyString(),
         envVars = org.mockito.ArgumentMatchers.any(),
-        nodeSelector = org.mockito.ArgumentMatchers.any()
+        nodeSelector = org.mockito.ArgumentMatchers.any(),
+        groupByName = org.mockito.ArgumentMatchers.any()
       )
     ).thenReturn("flink-abc123")
 
@@ -967,6 +968,96 @@ class EmrServerlessSubmitterTest extends AnyFlatSpec with Matchers with MockitoS
     )
 
     jobId shouldBe "flink:zipline-flink:flink-abc123"
+  }
+
+  it should "extract groupByName from --groupby-name arg" in {
+    val mockClient = mock[EmrServerlessClient]
+    val mockEks = mock[K8sFlinkSubmitter]
+    val groupByCaptor = org.mockito.ArgumentCaptor.forClass(classOf[Option[String]])
+    when(
+      mockEks.submit(
+        jobId = org.mockito.ArgumentMatchers.anyString(),
+        mainClass = org.mockito.ArgumentMatchers.anyString(),
+        mainJarUri = org.mockito.ArgumentMatchers.anyString(),
+        jarUris = org.mockito.ArgumentMatchers.any(),
+        flinkCheckpointUri = org.mockito.ArgumentMatchers.anyString(),
+        maybeSavepointUri = org.mockito.ArgumentMatchers.any(),
+        maybeFlinkJarsUri = org.mockito.ArgumentMatchers.any(),
+        jobProperties = org.mockito.ArgumentMatchers.any(),
+        args = org.mockito.ArgumentMatchers.any(),
+        serviceAccount = org.mockito.ArgumentMatchers.anyString(),
+        namespace = org.mockito.ArgumentMatchers.anyString(),
+        envVars = org.mockito.ArgumentMatchers.any(),
+        nodeSelector = org.mockito.ArgumentMatchers.any(),
+        groupByName = groupByCaptor.capture()
+      )
+    ).thenReturn("flink-abc123")
+
+    val submitter = createSubmitter(mockClient, eksFlinkSubmitter = Some(mockEks))
+    submitter.submit(
+      jobType = FlinkJob,
+      submissionProperties = Map(
+        JobId -> "test-job-id",
+        MainClass -> "ai.chronon.flink.FlinkJob",
+        JarURI -> "s3://bucket/cloud_aws_lib_deploy.jar",
+        FlinkMainJarURI -> "s3://bucket/flink_assembly_deploy.jar",
+        FlinkCheckpointUri -> "s3://bucket/checkpoints",
+        EksServiceAccount -> "zipline-flink-sa",
+        EksNamespace -> "zipline-flink",
+        MetadataName -> "should_be_ignored_streaming"
+      ),
+      jobProperties = Map.empty,
+      files = List.empty,
+      labels = Map.empty,
+      envVars = Map.empty,
+      "--groupby-name=ranking.user.last_n_product_saved.v1__2"
+    )
+
+    groupByCaptor.getValue shouldBe Some("ranking.user.last_n_product_saved.v1__2")
+  }
+
+  it should "pass groupByName as None when --groupby-name arg is absent" in {
+    val mockClient = mock[EmrServerlessClient]
+    val mockEks = mock[K8sFlinkSubmitter]
+    val groupByCaptor = org.mockito.ArgumentCaptor.forClass(classOf[Option[String]])
+    when(
+      mockEks.submit(
+        jobId = org.mockito.ArgumentMatchers.anyString(),
+        mainClass = org.mockito.ArgumentMatchers.anyString(),
+        mainJarUri = org.mockito.ArgumentMatchers.anyString(),
+        jarUris = org.mockito.ArgumentMatchers.any(),
+        flinkCheckpointUri = org.mockito.ArgumentMatchers.anyString(),
+        maybeSavepointUri = org.mockito.ArgumentMatchers.any(),
+        maybeFlinkJarsUri = org.mockito.ArgumentMatchers.any(),
+        jobProperties = org.mockito.ArgumentMatchers.any(),
+        args = org.mockito.ArgumentMatchers.any(),
+        serviceAccount = org.mockito.ArgumentMatchers.anyString(),
+        namespace = org.mockito.ArgumentMatchers.anyString(),
+        envVars = org.mockito.ArgumentMatchers.any(),
+        nodeSelector = org.mockito.ArgumentMatchers.any(),
+        groupByName = groupByCaptor.capture()
+      )
+    ).thenReturn("flink-abc123")
+
+    val submitter = createSubmitter(mockClient, eksFlinkSubmitter = Some(mockEks))
+    submitter.submit(
+      jobType = FlinkJob,
+      submissionProperties = Map(
+        JobId -> "test-job-id",
+        MainClass -> "ai.chronon.flink.FlinkJob",
+        JarURI -> "s3://bucket/cloud_aws_lib_deploy.jar",
+        FlinkMainJarURI -> "s3://bucket/flink_assembly_deploy.jar",
+        FlinkCheckpointUri -> "s3://bucket/checkpoints",
+        EksServiceAccount -> "zipline-flink-sa",
+        EksNamespace -> "zipline-flink"
+      ),
+      jobProperties = Map.empty,
+      files = List.empty,
+      labels = Map.empty,
+      envVars = Map.empty
+    )
+
+    groupByCaptor.getValue shouldBe None
   }
 
   // --- createSubmissionPropsMap for Flink ---

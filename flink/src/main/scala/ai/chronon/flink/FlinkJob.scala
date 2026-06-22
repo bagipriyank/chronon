@@ -3,6 +3,7 @@ package ai.chronon.flink
 import ai.chronon.api.Constants.MetadataDataset
 import ai.chronon.api.Extensions.{GroupByOps, SourceOps}
 import ai.chronon.api.{Constants, DataModel}
+import ai.chronon.online.serde.DebeziumMutationMapper
 import ai.chronon.flink.{AsyncKVStoreWriter, FlinkGroupByStreamingJob}
 import ai.chronon.flink.deser.{DeserializationSchemaBuilder, FlinkSerDeProvider, ProjectedEvent, SourceProjection}
 import ai.chronon.flink.chaining.ChainedGroupByJob
@@ -247,11 +248,25 @@ object FlinkJob {
                             servingInfo: GroupByServingInfoParsed,
                             enableDebug: Boolean = false,
                             maybeTopicOverride: Option[String] = None): BaseFlinkJob = {
-    // Check if this is a JoinSource GroupBy
-    if (servingInfo.groupBy.streamingSource.get.isSetJoinSource) {
+    val streamingSource = servingInfo.groupBy.streamingSource.get
+    if (streamingSource.isSetJoinSource) {
       buildJoinSourceFlinkJob(groupByName, props, api, servingInfo, enableDebug, maybeTopicOverride)
+    } else if (streamingSource.isSetEntities) {
+      buildGroupByStreamingJob(groupByName,
+                               props,
+                               api,
+                               servingInfo,
+                               enableDebug,
+                               maybeTopicOverride,
+                               isEntitySource = true)
     } else {
-      buildGroupByStreamingJob(groupByName, props, api, servingInfo, enableDebug, maybeTopicOverride)
+      buildGroupByStreamingJob(groupByName,
+                               props,
+                               api,
+                               servingInfo,
+                               enableDebug,
+                               maybeTopicOverride,
+                               isEntitySource = false)
     }
   }
 
@@ -326,11 +341,19 @@ object FlinkJob {
                                        api: Api,
                                        servingInfo: GroupByServingInfoParsed,
                                        enableDebug: Boolean,
-                                       maybeTopicOverride: Option[String] = None): FlinkGroupByStreamingJob = {
+                                       maybeTopicOverride: Option[String] = None,
+                                       isEntitySource: Boolean): FlinkGroupByStreamingJob = {
     val logger = LoggerFactory.getLogger(getClass)
 
     val rawTopic = maybeTopicOverride.getOrElse(servingInfo.groupBy.streamingSource.get.topic)
-    val topicInfo = TopicInfo.parse(rawTopic)
+    val parsedTopicInfo = TopicInfo.parse(rawTopic)
+    // Entity CDC topics always use Debezium format — inject the flag if not already present so the
+    // SerDe provider selects DebeziumAvroSerDe/DebeziumJsonSerDe automatically.
+    val topicInfo =
+      if (isEntitySource && !parsedTopicInfo.params.contains(DebeziumMutationMapper.DebeziumKey))
+        parsedTopicInfo.copy(params = parsedTopicInfo.params + (DebeziumMutationMapper.DebeziumKey -> "true"))
+      else
+        parsedTopicInfo
     val schemaProvider = FlinkSerDeProvider.build(topicInfo)
 
     // Use the existing GroupBy-based interface for regular GroupBys
@@ -359,7 +382,8 @@ object FlinkJob {
     val source = FlinkSourceProvider.build(props, deserializationSchema, topicInfo)
     val sinkFn = new AsyncKVStoreWriter(api, servingInfo.groupBy.metaData.name, enableDebug)
 
-    logger.info(s"Building regular GroupBy: $groupByName. Using FlinkGroupByStreamingJob.")
+    val sourceTypeLabel = if (isEntitySource) "EntitySource" else "EventSource"
+    logger.info(s"Building $sourceTypeLabel GroupBy: $groupByName. Using FlinkGroupByStreamingJob.")
     new FlinkGroupByStreamingJob(
       eventSrc = source,
       inputSchema = projectedSchema,

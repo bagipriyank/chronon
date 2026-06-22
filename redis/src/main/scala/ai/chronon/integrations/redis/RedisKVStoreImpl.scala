@@ -225,7 +225,7 @@ class RedisKVStoreImpl(jedisCluster: JedisCluster, conf: Map[String, String] = M
   }
 
   override def list(request: ListRequest): Future[ListResponse] = {
-    logger.info(s"Performing list for ${request.dataset}")
+    logger.debug(s"Performing list for ${request.dataset}")
 
     val listLimit = request.props.get(ListLimit) match {
       case Some(value: Int)    => value

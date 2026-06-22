@@ -15,6 +15,8 @@ import com.google.cloud.bigtable.data.v2.BigtableDataClient
 import com.google.cloud.bigtable.data.v2.BigtableDataSettings
 import com.google.cloud.bigtable.data.v2.models.{Query, Row, RowMutation}
 import com.google.cloud.bigtable.emulator.v2.Emulator
+import com.google.cloud.bigquery.{BigQuery, JobInfo}
+import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.{when, withSettings}
 import org.scalatest.BeforeAndAfter
@@ -748,6 +750,71 @@ class BigTableKVStoreTest extends AnyFlatSpec with BeforeAndAfter {
       tSeq.map(_.millis).toSet shouldBe expectedTimestamps.toSet
       tSeq.map(v => new String(v.bytes, StandardCharsets.UTF_8)).foreach(v => v shouldBe expectedPayload)
       tSeq.length shouldBe expectedTimestamps.length
+    }
+  }
+
+  // Captures the JobInfo submitted by bulkPut so callers can assert on its location.
+  // We short-circuit the BQ flow by throwing from create(); the JobInfo is captured before
+  // the throw, and bulkPut swallows the exception via its metrics path.
+  private def captureBulkPutJobInfo(conf: Map[String, String]): JobInfo = {
+    val bigQueryClient = mock[BigQuery]
+    when(bigQueryClient.create(any[JobInfo])).thenThrow(new RuntimeException("short-circuit"))
+
+    val kvStore =
+      new BigTableKVStoreImpl(dataClient, adminClient, maybeBigQueryClient = Some(bigQueryClient), conf = conf)
+    try kvStore.bulkPut("project.dataset.source_tbl", "test_dataset", "2026-06-11")
+    catch { case _: RuntimeException => () }
+
+    val captor = ArgumentCaptor.forClass(classOf[JobInfo])
+    org.mockito.Mockito.verify(bigQueryClient).create(captor.capture())
+    captor.getValue
+  }
+
+  it should "pin bulkPut export job to GCP_LOCATION from conf" in {
+    val jobInfo = captureBulkPutJobInfo(Map("GCP_LOCATION" -> "us-west1"))
+    jobInfo.getJobId.getLocation shouldBe "us-west1"
+    jobInfo.getJobId.getProject shouldBe projectId
+  }
+
+  it should "pin bulkPut export job to GCP_LOCATION from env (taking precedence over conf)" in {
+    // env takes precedence over conf in GcpApiImpl.getOptional, so we set both with different
+    // values and assert the env value wins
+    withEnv("GCP_LOCATION", "us-east4") {
+      val jobInfo = captureBulkPutJobInfo(Map("GCP_LOCATION" -> "us-central1"))
+      jobInfo.getJobId.getLocation shouldBe "us-east4"
+      jobInfo.getJobId.getProject shouldBe projectId
+    }
+  }
+
+  it should "default bulkPut export job location to null when GCP_LOCATION is absent" in {
+    val jobInfo = captureBulkPutJobInfo(Map.empty)
+    jobInfo.getJobId.getLocation shouldBe null
+  }
+
+  // Mutates the JVM's view of System.getenv() for the duration of `body`, then restores the
+  // prior value. Required because System.getenv() returns an unmodifiable map, java.lang.System
+  // is on Mockito's mockStatic denylist (deadlocks class loading), and Scala's sys.env reads
+  // System.getenv() fresh on each access. Linux/macOS only; Windows uses a separate case-
+  // insensitive map we don't bother with since CI runs on Linux.
+  private def withEnv[T](key: String, value: String)(body: => T): T = {
+    val prior = Option(System.getenv(key))
+    setEnv(key, Some(value))
+    try body
+    finally setEnv(key, prior)
+  }
+
+  private def setEnv(key: String, value: Option[String]): Unit = {
+    val pe = Class.forName("java.lang.ProcessEnvironment")
+    val envField = pe.getDeclaredField("theEnvironment")
+    envField.setAccessible(true)
+    val env = envField.get(null).asInstanceOf[java.util.Map[AnyRef, AnyRef]]
+    val varOf = Class.forName("java.lang.ProcessEnvironment$Variable").getDeclaredMethod("valueOf", classOf[String])
+    val valOf = Class.forName("java.lang.ProcessEnvironment$Value").getDeclaredMethod("valueOf", classOf[String])
+    varOf.setAccessible(true)
+    valOf.setAccessible(true)
+    value match {
+      case Some(v) => env.put(varOf.invoke(null, key), valOf.invoke(null, v))
+      case None    => env.remove(varOf.invoke(null, key))
     }
   }
 }

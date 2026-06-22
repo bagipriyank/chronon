@@ -24,11 +24,14 @@ Set the following environment variables on the frontend service:
 | Variable | Required | Description |
 |---|---|---|
 | `AUTH_ENABLED` | Yes | Set to `true` to enable authentication |
-| `AUTH_URL` | Yes | Base URL of the frontend (e.g., `https://zipline.example.com`). Used for OAuth redirect URIs |
+| `AUTH_URL` | Yes | Base URL of the frontend (e.g., `https://zipline.example.com`). Used for OAuth redirect URIs and as the JWT issuer / JWKS origin |
+| `AUTH_EXTERNAL_URL` | No | Public URL when the frontend is behind a reverse proxy (CloudFront, API Gateway, ingress) and `AUTH_URL` is an internal origin. Used for user-facing URLs — the SAML post-login redirect and the CLI device-login verification URL — so they resolve to the host users actually reach. `AUTH_URL` (and the JWT issuer / JWKS) stay internal. Leave unset when `AUTH_URL` is already the public URL |
 | `AUTH_SECRET` | Yes | Random secret (32+ characters) used for signing keys. Generate with `openssl rand -base64 32` |
 | `AUTH_ALLOWED_HOSTS` | No | Comma-separated list of additional allowed hosts for incoming requests (e.g., internal service names like `orchestration-ui-service`). `AUTH_URL` and `host.docker.internal:*` are always allowed |
 
 You must also configure at least one authentication provider (see below).
+
+> **Behind a reverse proxy:** If users reach Zipline through an external domain (CloudFront, API Gateway, an ingress) that forwards to a different internal origin, set `AUTH_URL` to the internal origin — so the JWT issuer and JWKS endpoint stay reachable by the backend services — and `AUTH_EXTERNAL_URL` to the public domain. User-facing URLs (the SAML post-login redirect and the `zipline auth login` device URL) then use the public domain while tokens keep the internal issuer. If you don't need the issuer to stay internal, you can instead set `AUTH_URL` to the public URL and omit `AUTH_EXTERNAL_URL`.
 
 ### Backend Services (Orchestration & Eval)
 
@@ -107,7 +110,7 @@ For enterprise SSO via SAML 2.0:
 | `SSO_PROVIDER_ID` | No | Identifier for the provider (e.g., `okta`). Defaults to `default-sso` |
 | `SSO_DOMAIN` | Yes | Email domain to match users to this provider |
 | `SSO_SAML_ENTRY_POINT` | Yes | SAML IdP SSO URL |
-| `SSO_SAML_ISSUER` | No | SAML IdP issuer/entity ID. Defaults to `AUTH_URL` |
+| `SSO_SAML_ISSUER` | Yes | The IdP's issuer / entity ID — must match your IdP's SAML issuer (e.g. Okta's **SAML Issuer ID**, `http://www.okta.com/{externalId}`) |
 | `SSO_SAML_CERT` | Yes | IdP signing certificate (base64, without BEGIN/END wrapper) |
 | `SSO_SAML_CALLBACK_URL` | No | SAML ACS callback URL. Auto-generated if not set |
 

@@ -15,10 +15,13 @@ jobs:
     outputs:
       scala: ${{ steps.filter.outputs.scala }}
       python: ${{ steps.filter.outputs.python }}
+      smoke: ${{ steps.filter.outputs.smoke }}
       azure: ${{ steps.filter.outputs.azure }}
       redis: ${{ steps.filter.outputs.redis }}
       security: ${{ steps.filter.outputs.security }}
       format: ${{ steps.filter.outputs.format }}
+      ci_infra: ${{ steps.filter.outputs.ci_infra }}
+      ci_image: ${{ steps.filter.outputs.ci_image }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -32,6 +35,8 @@ jobs:
             python:
               - 'python/**'
               - 'thrift/**'
+            smoke:
+              - 'scripts/ci/scaffold_smoke_test.sh'
             azure:
               - 'cloud_azure/**'
               - 'online/**'
@@ -48,6 +53,46 @@ jobs:
             format:
               - '**/*.scala'
               - '.scalafmt.conf'
+            ci_infra:
+              - '.github/actions/**'
+              - '.github/workflows/**'
+              - '.github/image/Dockerfile'
+              - '.mill-version'
+              - 'mill'
+            ci_image:
+              - '.github/image/Dockerfile'
+
+  ci-infra:
+    needs: changes
+    if: needs.changes.outputs.ci_infra == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate workflow YAML
+        run: |
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}", ".github/actions/**/*.{yml,yaml}"].sort.each { |f| YAML.load_file(f); puts f }'
+      - uses: ./.github/actions/setup-mill-cache
+        with:
+          cache-root: /home/runner/.cache
+          coursier-repositories: ${{ vars.COURSIER_REPOSITORIES }}
+      - name: Verify cache environment
+        run: |
+          test "$XDG_CACHE_HOME" = "/home/runner/.cache"
+          test "$COURSIER_CACHE" = "/home/runner/.cache/coursier"
+          test "$UV_CACHE_DIR" = "/home/runner/.cache/uv"
+          test -d "$COURSIER_CACHE"
+          test -d "$XDG_CACHE_HOME/mill"
+          test -d "$UV_CACHE_DIR"
+      - name: Set up Docker Buildx
+        if: needs.changes.outputs.ci_image == 'true'
+        uses: docker/setup-buildx-action@v3
+      - name: Build CI Docker image
+        if: needs.changes.outputs.ci_image == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .github/image
+          push: false
+          tags: chronon-ci-pr-test:${{ github.sha }}
 
   spark:
     needs: changes
@@ -83,16 +128,17 @@ jobs:
         working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-mill-cache
+        with:
+          coursier-repositories: ${{ vars.COURSIER_REPOSITORIES }}
       - name: Configure Git
         run: |
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
-      - name: Install uv
+      - name: Verify uv
         shell: bash
         run: |
-          apt-get update && apt-get install -y curl
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          uv --version
       - name: Run Python lint and format check
         shell: bash
         run: |
@@ -102,7 +148,7 @@ jobs:
   python-tests:
     needs: changes
     if: needs.changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-8_cores-32_gb
     container:
       image: ghcr.io/${{ github.repository }}-ci:latest
       credentials:
@@ -113,16 +159,17 @@ jobs:
         working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-mill-cache
+        with:
+          coursier-repositories: ${{ vars.COURSIER_REPOSITORIES }}
       - name: Configure Git
         run: |
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
-      - name: Install uv
+      - name: Verify uv
         shell: bash
         run: |
-          apt-get update && apt-get install -y curl
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          uv --version
       - name: Run Python tests
         shell: bash
         run: |
@@ -137,6 +184,39 @@ jobs:
           name: htmlcov
           path: out/python/test/coverageHtml.dest/htmlcov
 
+  python-scaffold-smoke:
+    needs: changes
+    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.smoke == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-mill-cache
+        with:
+          coursier-repositories: ${{ vars.COURSIER_REPOSITORIES }}
+      - name: Configure Git
+        run: |
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
+      - name: Verify uv
+        shell: bash
+        run: |
+          uv --version
+      - name: Run scaffold smoke test (zipline admin init + compile)
+        shell: bash
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          ./scripts/ci/scaffold_smoke_test.sh
+
   cosmos:
     needs: changes
     if: needs.changes.outputs.azure == 'true'
@@ -147,22 +227,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-mill-cache
+        with:
+          cache-root: /home/runner/.cache
+          coursier-repositories: ${{ vars.COURSIER_REPOSITORIES }}
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '11'
+          java-version: '17'
       - name: Install Thrift
         run: |
           sudo apt-get update
           sudo apt-get install -y thrift-compiler
-      - name: Cache Mill
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/mill
-          key: ${{ runner.os }}-mill-${{ hashFiles('build.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-mill-
       - name: Verify Docker is available
         run: |
           docker version
@@ -252,22 +329,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-mill-cache
+        with:
+          cache-root: /home/runner/.cache
+          coursier-repositories: ${{ vars.COURSIER_REPOSITORIES }}
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '11'
+          java-version: '17'
       - name: Install Thrift
         run: |
           sudo apt-get update
           sudo apt-get install -y thrift-compiler
-      - name: Cache Mill
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/mill
-          key: ${{ runner.os }}-mill-${{ hashFiles('build.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-mill-
       - name: Verify Docker is available
         run: |
           docker version
@@ -292,11 +366,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-mill-cache
+        with:
+          cache-root: /home/runner/.cache
+          coursier-repositories: ${{ vars.COURSIER_REPOSITORIES }}
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '11'
+          java-version: '17'
       - name: Check Scalafmt
         run: |
           ./mill __.checkFormat
@@ -308,7 +386,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [spark, non-spark, python-lint, python-tests, cosmos, redis, format, grype]
+    needs: [spark, non-spark, python-lint, python-tests, python-scaffold-smoke, cosmos, redis, format, grype, ci-infra]
     runs-on: ubuntu-latest
     steps:
       - name: Check CI results

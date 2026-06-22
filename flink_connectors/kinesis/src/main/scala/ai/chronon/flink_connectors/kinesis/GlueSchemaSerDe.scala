@@ -2,7 +2,18 @@ package ai.chronon.flink_connectors.kinesis
 
 import ai.chronon.api.StructType
 import ai.chronon.online.TopicInfo
-import ai.chronon.online.serde.{AvroCodec, AvroSerDe, JsonSchemaSerDe, LocalSchemaSerDe, Mutation, ProtobufSerDe, SerDe}
+import ai.chronon.online.serde.{
+  AvroCodec,
+  AvroSerDe,
+  DebeziumAvroSerDe,
+  DebeziumJsonSerDe,
+  DebeziumMutationMapper,
+  JsonSchemaSerDe,
+  LocalSchemaSerDe,
+  Mutation,
+  ProtobufSerDe,
+  SerDe
+}
 import io.confluent.kafka.schemaregistry.protobuf.ProtobufSchema
 import org.apache.avro.Schema
 import org.slf4j.LoggerFactory
@@ -40,6 +51,9 @@ class GlueSchemaSerDe(topicInfo: TopicInfo) extends SerDe {
 
   private val proto3DefaultAsNull: Boolean =
     topicInfo.params.getOrElse(Proto3DefaultAsNullKey, "false").toBoolean
+
+  private val isDebezium: Boolean =
+    topicInfo.params.getOrElse(DebeziumMutationMapper.DebeziumKey, "false").toBoolean
 
   (topicInfo.params.get(AccessKeyIdKey), topicInfo.params.get(SecretAccessKeyKey)) match {
     case (Some(_), Some(_)) | (None, None) => // valid combinations
@@ -132,10 +146,13 @@ class GlueSchemaSerDe(topicInfo: TopicInfo) extends SerDe {
     format match {
       case "AVRO" =>
         val avroSchema: Schema = AvroCodec.of(schemaDefinition).schema
-        new AvroSerDe(avroSchema)
+        if (isDebezium) new DebeziumAvroSerDe(avroSchema) else new AvroSerDe(avroSchema)
       case "JSON" =>
-        new JsonSchemaSerDe(schemaDefinition, schemaName)
+        if (isDebezium) new DebeziumJsonSerDe(schemaDefinition, schemaName)
+        else new JsonSchemaSerDe(schemaDefinition, schemaName)
       case "PROTOBUF" =>
+        if (isDebezium)
+          throw new IllegalArgumentException("debezium is not supported with Protobuf schemas. Use Avro / Json.")
         val protobufSchema = new ProtobufSchema(schemaDefinition)
         val descriptor = protobufSchema.toDescriptor()
         new ProtobufSerDe(descriptor, proto3DefaultAsNull)

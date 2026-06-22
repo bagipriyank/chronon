@@ -12,7 +12,7 @@ import ai.chronon.spark.batch.iceberg.IcebergPartitionStatsExtractor
 import ai.chronon.spark.batch.{StagingQuery => StagingQueryUtil}
 import ai.chronon.spark.catalog.TableUtils
 import ai.chronon.spark.join.UnionJoin
-import ai.chronon.spark.submission.SparkSessionBuilder
+import ai.chronon.spark.submission.{NodeConfReader, SparkSessionBuilder}
 import ai.chronon.spark.utils.SemanticUtils
 import ai.chronon.spark.{GroupBy, GroupByUpload, Join, ModelTransformsJob}
 import org.rogach.scallop.{ScallopConf, ScallopOption}
@@ -323,53 +323,72 @@ class BatchNodeRunner(node: Node, tableUtils: TableUtils, api: Api) extends Node
     logger.info(s"Successfully computed and saved stats for join '$joinName'")
   }
 
-  private[batch] def extractAndPersistPartitionStats(metricsKvStore: KVStore, outputTable: String, confName: String)(
-      implicit partitionSpec: PartitionSpec): Unit = {
+  private[batch] def extractAndPersistPartitionStats(metricsKvStore: KVStore,
+                                                     outputTable: String,
+                                                     confName: String,
+                                                     range: PartitionRange)(implicit
+      partitionSpec: PartitionSpec): Unit = {
     try {
       logger.info(s"Extracting partition statistics for table: $outputTable")
       val statsExtractor = new IcebergPartitionStatsExtractor(tableUtils.sparkSession)
 
-      statsExtractor.extractPartitionedStats(outputTable, confName) match {
-        case Some(tileSummaries) if tileSummaries.nonEmpty =>
-          val groupedTileSummaries = tileSummaries.groupBy { case (observabilityTileKey, _) =>
-            val dayPartitionMillis =
-              IcebergPartitionStatsExtractor.extractPartitionMillisFromSlice(observabilityTileKey.getSlice,
-                                                                             partitionSpec)
-            (dayPartitionMillis)
-          }
+      statsExtractor.extractPartitionStatsWithRowCounts(outputTable, confName) match {
+        case Some(result) =>
+          logIcebergPartitionRowCounts(outputTable, confName, range, result.partitionRowCounts)
 
-          val statsPutRequests = groupedTileSummaries.map { case ((dayPartitionMillis), columnTileSummaries) =>
-            val nullCountsStats = IcebergPartitionStatsExtractor.createNullCountsStats(columnTileSummaries)
-            val partitionStats = TileStats.nullCounts(nullCountsStats)
-            IcebergPartitionStatsExtractor.createPartitionStatsPutRequest(outputTable,
-                                                                          partitionStats,
-                                                                          dayPartitionMillis,
-                                                                          TileStatsType.NULL_COUNTS)
-          }.toSeq
+          val tileSummaries = result.tileSummaries
+          if (tileSummaries.nonEmpty) {
+            val groupedTileSummaries = tileSummaries.groupBy { case (observabilityTileKey, _) =>
+              val dayPartitionMillis =
+                IcebergPartitionStatsExtractor.extractPartitionMillisFromSlice(observabilityTileKey.getSlice,
+                                                                               partitionSpec)
+              (dayPartitionMillis)
+            }
 
-          statsExtractor.extractSchemaMapping(outputTable) match {
-            case Some(schemaMapping) =>
-              val schemaPutRequest =
-                IcebergPartitionStatsExtractor.createSchemaMappingPutRequest(outputTable, schemaMapping)
-              val allPutRequests = statsPutRequests :+ schemaPutRequest
+            val statsPutRequests = groupedTileSummaries.map { case ((dayPartitionMillis), columnTileSummaries) =>
+              val nullCountsStats = IcebergPartitionStatsExtractor.createNullCountsStats(columnTileSummaries)
+              val partitionStats = TileStats.nullCounts(nullCountsStats)
+              IcebergPartitionStatsExtractor.createPartitionStatsPutRequest(outputTable,
+                                                                            partitionStats,
+                                                                            dayPartitionMillis,
+                                                                            TileStatsType.NULL_COUNTS)
+            }.toSeq
 
-              try {
-                val kvStoreUpdates = metricsKvStore.multiPut(allPutRequests)
-                Await.result(kvStoreUpdates, 30.seconds)
+            statsExtractor.extractSchemaMapping(outputTable) match {
+              case Some(schemaMapping) =>
+                val schemaPutRequest =
+                  IcebergPartitionStatsExtractor.createSchemaMappingPutRequest(outputTable, schemaMapping)
+                val allPutRequests = statsPutRequests :+ schemaPutRequest
 
+                try {
+                  val kvStoreUpdates = metricsKvStore.multiPut(allPutRequests)
+                  val results = Await.result(kvStoreUpdates, 30.seconds)
+                  val failedIndices = results.zipWithIndex.collect { case (false, i) => i }
+
+                  if (failedIndices.isEmpty) {
+                    logger.info(
+                      s"Successfully persisted data quality metrics and schema mapping for table: $outputTable (${tileSummaries.size} tile summaries)")
+                  } else {
+                    val failedKeys = failedIndices
+                      .map(i =>
+                        s"[$i] ${new String(allPutRequests(i).keyBytes, java.nio.charset.StandardCharsets.UTF_8)}")
+                      .mkString(", ")
+                    logger.error(
+                      s"Partial failure persisting data quality metrics for table: $outputTable. " +
+                        s"${failedIndices.size}/${results.size} writes failed. Failed requests: $failedKeys")
+                  }
+                } catch {
+                  case e: Exception =>
+                    logger.info(
+                      s"Failed to persist data quality metrics to KV store for table: $outputTable. This may be expected if the KV store table does not exist. Error: ${e.traceString}")
+                }
+              case None =>
                 logger.info(
-                  s"Successfully persisted data quality metrics and schema mapping for table: $outputTable (${tileSummaries.size} tile summaries)")
-              } catch {
-                case e: Exception =>
-                  logger.info(
-                    s"Failed to persist data quality metrics to KV store for table: $outputTable. This may be expected if the KV store table does not exist. Error: ${e.traceString}")
-              }
-            case None =>
-              logger.info(
-                s"Could not extract schema mapping for table: $outputTable, skipping column stats persistence")
+                  s"Could not extract schema mapping for table: $outputTable, skipping column stats persistence")
+            }
+          } else {
+            logger.info(s"No tile summaries found for table: $outputTable")
           }
-        case Some(tileSummaries) if tileSummaries.isEmpty =>
-          logger.info(s"No tile summaries found for table: $outputTable")
         case None =>
           logger.info(
             s"Table $outputTable is not an Iceberg table or is not partitioned, skipping column stats extraction")
@@ -378,6 +397,46 @@ class BatchNodeRunner(node: Node, tableUtils: TableUtils, api: Api) extends Node
       case e: Exception =>
         logger.error(s"Failed to extract/persist data quality metrics for table: $outputTable", e)
       // Don't fail the job if stats extraction fails
+    }
+  }
+
+  private[batch] def logIcebergPartitionRowCounts(
+      outputTable: String,
+      confName: String,
+      range: PartitionRange,
+      partitionRowCounts: Map[IcebergPartitionStatsExtractor.PartitionKey, Long]
+  )(implicit partitionSpec: PartitionSpec): Option[Seq[(String, Long)]] = {
+    try {
+      logger.info(
+        s"Logging Iceberg partition row counts for table: $outputTable within range [${range.start}, ${range.end}]")
+      val col = partitionSpec.column
+      val translated = range.translate(partitionSpec)
+      val matched: Seq[(String, Long)] = partitionRowCounts.toSeq
+        .flatMap { case (key, rows) =>
+          key.find(_._1 == col).map { case (_, dsVal) =>
+            val pathStr = key.map { case (k, v) => s"$k=$v" }.mkString("/")
+            (dsVal, pathStr, rows)
+          }
+        }
+        .filter { case (dsVal, _, _) => dsVal >= translated.start && dsVal <= translated.end }
+        .sortBy { case (_, pathStr, _) => pathStr }
+        .map { case (_, pathStr, rows) => pathStr -> rows }
+
+      if (matched.isEmpty) {
+        logger.info(
+          s"No Iceberg partitions found within range [${translated.start}, ${translated.end}] for '$confName' table=$outputTable")
+      } else {
+        matched.foreach { case (pathStr, rows) =>
+          logger.info(s"Iceberg row count for '$confName' table=$outputTable $pathStr: $rows rows")
+        }
+      }
+      Some(matched)
+    } catch {
+      case e: Exception =>
+        logger.warn(
+          s"Failed to log Iceberg per-partition row counts for '$confName' table=$outputTable; continuing without it",
+          e)
+        None
     }
   }
 
@@ -515,7 +574,7 @@ class BatchNodeRunner(node: Node, tableUtils: TableUtils, api: Api) extends Node
         val metricsKvStore = api.genMetricsKvStore(tableStats)
         Option(metadata.outputTable) match {
           case Some(outputTable) =>
-            extractAndPersistPartitionStats(metricsKvStore, outputTable, metadata.name)(outputTablePartitionSpec)
+            extractAndPersistPartitionStats(metricsKvStore, outputTable, metadata.name, range)(outputTablePartitionSpec)
           case None =>
             logger.warn(s"Skipping partition stats extraction for '${metadata.name}' - outputTable is null")
         }
@@ -551,45 +610,46 @@ class BatchNodeRunner(node: Node, tableUtils: TableUtils, api: Api) extends Node
 
     inputTableDependencies
       .filterNot(_._2.forall(td => td.isSetIsSoftNodeDependency && td.isSoftNodeDependency))
-      .map { case (table, deps) =>
-        val inputPartitionSpec = deps.head.tableInfo.partitionSpec(tableUtils.partitionSpec)
-
-        val firstPartition =
-          tableUtils.firstAvailablePartition(table, partitionSpec = inputPartitionSpec)
-        val lastPartition = tableUtils.lastAvailablePartition(table, tablePartitionSpec = Some(inputPartitionSpec))
-
-        // Compute the maximum required end across all dependencies for this table
-        val requiredEnd = deps
+      .flatMap { case (table, deps) =>
+        val requiredEnds = deps
           .flatMap { td =>
             DependencyResolver
               .computeInputRange(range, td)
-              .map(_.translate(tableUtils.partitionSpec))
-              .map(_.end)
+              .map(_.translate(tableUtils.partitionSpec).end)
           }
           .toSeq
           .sorted
-          .lastOption
-          .getOrElse(range.end)
 
-        val ready = lastPartition.exists(_ >= requiredEnd)
-
-        // Collect semanticHash values from all dependencies for this table
-        val semanticHashes = deps.flatMap { td =>
-          if (td.isSetSemanticHash && td.semanticHash.nonEmpty) {
-            Some(td.semanticHash)
-          } else {
-            None
-          }
-        }.toSet
-
-        val semanticHash = if (semanticHashes.size > 1) {
-          logger.error(s"Table $table has inconsistent semanticHash values across dependencies: $semanticHashes")
+        if (requiredEnds.isEmpty) {
           None
         } else {
-          semanticHashes.headOption
-        }
+          val inputPartitionSpec = deps.head.tableInfo.partitionSpec(tableUtils.partitionSpec)
 
-        TablePartitionStatus(table, firstPartition, lastPartition, ready, requiredEnd, semanticHash)
+          val firstPartition =
+            tableUtils.firstAvailablePartition(table, partitionSpec = inputPartitionSpec)
+          val lastPartition = tableUtils.lastAvailablePartition(table, tablePartitionSpec = Some(inputPartitionSpec))
+          val requiredEnd = requiredEnds.last
+
+          val ready = lastPartition.exists(_ >= requiredEnd)
+
+          // Collect semanticHash values from all dependencies for this table
+          val semanticHashes = deps.flatMap { td =>
+            if (td.isSetSemanticHash && td.semanticHash.nonEmpty) {
+              Some(td.semanticHash)
+            } else {
+              None
+            }
+          }.toSet
+
+          val semanticHash = if (semanticHashes.size > 1) {
+            logger.error(s"Table $table has inconsistent semanticHash values across dependencies: $semanticHashes")
+            None
+          } else {
+            semanticHashes.headOption
+          }
+
+          Some(TablePartitionStatus(table, firstPartition, lastPartition, ready, requiredEnd, semanticHash))
+        }
       }
   }
 
@@ -696,7 +756,7 @@ object BatchNodeRunner {
     val batchArgs = new BatchNodeRunnerArgs(args)
     val resolvedEnv = SecretResolver.resolveVaultUris(sys.env.toMap)
     val driverSecrets = resolvedEnv -- sys.env.keySet
-    val node = ThriftJsonCodec.fromJsonFile[Node](batchArgs.confPath(), check = false)
+    val node = NodeConfReader.read(batchArgs.confPath())
     val tableUtils = TableUtils(SparkSessionBuilder.build(s"batch-node-runner-${node.metaData.name}"))
     val api = instantiateApi(batchArgs.onlineClass(), batchArgs.apiProps ++ driverSecrets)
     val runner = new BatchNodeRunner(node, tableUtils, api)

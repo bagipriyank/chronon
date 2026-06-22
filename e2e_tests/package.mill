@@ -1,0 +1,80 @@
+package build.e2e_tests
+import mill.api._
+import mill.scalalib._
+
+// This module has no production sources — it is test-only
+// Meant to capture various end to end streaming integration tests that require both the Spark & Flink engines
+object `package` extends Cross[E2eTestsModule](build.Constants.scalaVersions) with E2eTestsModule {
+  override val crossValue = build.Constants.defaultScalaVersion
+}
+
+trait E2eTestsModule extends Cross.Module[String] with build.BaseModule {
+
+  // No production sources — purely a test module.
+  override def sources = Task { Seq.empty[PathRef] }
+
+  object test extends build.BaseTestModule {
+    def scalaVersion = crossValue
+
+    def moduleDeps = Seq(
+      build.spark(crossValue),
+      build.flink(crossValue),
+      // cloud_gcp is needed so ChrononKryoRegistrator can resolve GCSFileIO at class-registration
+      // time (it references com.google.cloud.storage.Storage transitively via iceberg-gcp).
+      // Without it the Spark executor throws TypeNotPresentException during Kryo setup.
+      build.cloud_gcp(crossValue),
+      build.spark(crossValue).test,
+      build.flink(crossValue).test,
+      build.api(crossValue).test,
+      build.aggregator(crossValue).test
+    )
+
+    override def testFramework = "org.scalatest.tools.Framework"
+
+    def forkArgs = build.Constants.commonTestForkArgs ++ Seq(
+      "-Dspark.sql.hive.convertMetastoreParquet=false",
+      "-Djava.awt.headless=true"
+    )
+
+    def mvnDeps = super.mvnDeps() ++ build.Constants.testDeps ++ Seq(
+      // Flink runtime deps (provided in flink module, needed at test runtime here)
+      mvn"org.apache.flink:flink-streaming-java:${build.Constants.flinkVersion}",
+      mvn"org.apache.flink:flink-clients:${build.Constants.flinkVersion}",
+      mvn"org.apache.flink:flink-test-utils:${build.Constants.flinkVersion}"
+        .exclude("org.apache.logging.log4j" -> "log4j-slf4j-impl")
+        .exclude("log4j" -> "log4j"),
+      mvn"org.apache.flink:flink-avro:${build.Constants.flinkVersion}",
+      // Spark runtime deps (provided in spark module, needed at test runtime here)
+      mvn"org.apache.spark::spark-hive:${build.Constants.sparkVersion}",
+      mvn"org.apache.spark::spark-core:${build.Constants.sparkVersion}"
+        .exclude("com.fasterxml.jackson.core" -> "jackson-core")
+        .exclude("com.fasterxml.jackson.core" -> "jackson-databind")
+        .exclude("com.fasterxml.jackson.core" -> "jackson-annotations")
+        .exclude("org.apache.logging.log4j" -> "log4j-slf4j-impl")
+        .exclude("log4j" -> "log4j"),
+      mvn"org.apache.spark::spark-sql:${build.Constants.sparkVersion}"
+        .exclude("com.fasterxml.jackson.core" -> "jackson-core")
+        .exclude("com.fasterxml.jackson.core" -> "jackson-databind")
+        .exclude("com.fasterxml.jackson.core" -> "jackson-annotations")
+        .exclude("org.apache.logging.log4j" -> "log4j-slf4j-impl")
+        .exclude("log4j" -> "log4j"),
+      mvn"org.apache.spark::spark-catalyst:${build.Constants.sparkVersion}"
+        .exclude("com.fasterxml.jackson.core" -> "jackson-core")
+        .exclude("com.fasterxml.jackson.core" -> "jackson-databind")
+        .exclude("com.fasterxml.jackson.core" -> "jackson-annotations")
+        .exclude("org.apache.logging.log4j" -> "log4j-slf4j-impl")
+        .exclude("log4j" -> "log4j"),
+      mvn"org.apache.hadoop:hadoop-client-api:3.3.6"
+        .exclude("org.apache.logging.log4j" -> "log4j-slf4j-impl")
+        .exclude("log4j" -> "log4j"),
+      mvn"org.apache.hadoop:hadoop-client-runtime:3.3.6",
+      mvn"io.delta::delta-spark:3.3.2",
+      // Force Jackson to a single consistent version across Spark + Flink
+      mvn"com.fasterxml.jackson.core:jackson-core:${build.Constants.jacksonVersion}",
+      mvn"com.fasterxml.jackson.core:jackson-databind:${build.Constants.jacksonVersion}",
+      mvn"com.fasterxml.jackson.core:jackson-annotations:${build.Constants.jacksonVersion}",
+      // SLF4J pinned to match spark.test
+      mvn"org.slf4j:slf4j-api:1.7.36"
+    )
+  }
+}

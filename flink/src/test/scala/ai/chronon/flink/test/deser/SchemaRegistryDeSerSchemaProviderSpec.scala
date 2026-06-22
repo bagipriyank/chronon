@@ -1,10 +1,10 @@
 package ai.chronon.flink.test.deser
 
-import ai.chronon.api.{IntType, StringType, StructField}
+import ai.chronon.api.{BooleanType, Constants, IntType, LongType, StringType, StructField}
 import ai.chronon.flink.deser.SchemaRegistrySerDe
-import ai.chronon.flink.deser.SchemaRegistrySerDe.{Proto3DefaultAsNullKey, RegistryHostKey, SchemaRegistryWireFormat}
+import ai.chronon.flink.deser.SchemaRegistrySerDe._
 import ai.chronon.online.TopicInfo
-import ai.chronon.online.serde.AvroCodec
+import ai.chronon.online.serde.{AvroCodec, DebeziumAvroSerDe, DebeziumMutationMapper}
 import com.google.protobuf.DynamicMessage
 import io.confluent.kafka.schemaregistry.SchemaProvider
 import io.confluent.kafka.schemaregistry.avro.{AvroSchema, AvroSchemaProvider}
@@ -16,7 +16,8 @@ import org.scalatest.flatspec.AnyFlatSpec
 import java.nio.ByteBuffer
 import scala.jdk.CollectionConverters._
 
-class MockSchemaRegistrySerDe(topicInfo: TopicInfo, mockSchemaRegistryClient: MockSchemaRegistryClient)
+class MockSchemaRegistrySerDe(topicInfo: TopicInfo,
+                             mockSchemaRegistryClient: MockSchemaRegistryClient)
     extends SchemaRegistrySerDe(topicInfo) {
   override def buildSchemaRegistryClient(schemeString: String,
                                          registryHost: String,
@@ -260,6 +261,64 @@ class SchemaRegistrySerDeSpec extends AnyFlatSpec {
     assert(mutation.after(1) == null)
   }
 
+  "resolveRegistryAuthConfig" should "return empty map when no basic.auth.credentials.source is set" in {
+    val params = Map(RegistryHostKey -> "localhost")
+    val result = SchemaRegistrySerDe.resolveRegistryAuthConfig(params, _ => None)
+    assert(result.isEmpty)
+  }
+
+  it should "inject basic.auth.user.info from env var when credentials source is set but user info is not" in {
+    val params = Map(
+      RegistryHostKey -> "localhost",
+      BasicAuthCredentialsSourceKey -> "USER_INFO"
+    )
+    val result = SchemaRegistrySerDe.resolveRegistryAuthConfig(params, {
+      case BasicAuthUserInfoEnvVar => Some("my-key:my-secret")
+      case _                      => None
+    })
+    assert(result(BasicAuthCredentialsSourceKey) == "USER_INFO")
+    assert(result(BasicAuthUserInfoKey) == "my-key:my-secret")
+  }
+
+  it should "use explicit basic.auth.user.info from params over env var" in {
+    val params = Map(
+      RegistryHostKey -> "localhost",
+      BasicAuthCredentialsSourceKey -> "USER_INFO",
+      BasicAuthUserInfoKey -> "explicit-key:explicit-secret"
+    )
+    val result = SchemaRegistrySerDe.resolveRegistryAuthConfig(params, _ => Some("should-not-be-used"))
+    assert(result(BasicAuthUserInfoKey) == "explicit-key:explicit-secret")
+  }
+
+  it should "return only credentials source when env var is missing and user info is not in params" in {
+    val params = Map(
+      RegistryHostKey -> "localhost",
+      BasicAuthCredentialsSourceKey -> "USER_INFO"
+    )
+    val result = SchemaRegistrySerDe.resolveRegistryAuthConfig(params, _ => None)
+    assert(result(BasicAuthCredentialsSourceKey) == "USER_INFO")
+    assert(!result.contains(BasicAuthUserInfoKey))
+  }
+
+  it should "return empty map when credentials source is empty string" in {
+    val params = Map(
+      RegistryHostKey -> "localhost",
+      BasicAuthCredentialsSourceKey -> "  "
+    )
+    val result = SchemaRegistrySerDe.resolveRegistryAuthConfig(params, _ => Some("my-key:my-secret"))
+    assert(result.isEmpty)
+  }
+
+  it should "skip env var when it is blank" in {
+    val params = Map(
+      RegistryHostKey -> "localhost",
+      BasicAuthCredentialsSourceKey -> "USER_INFO"
+    )
+    val result = SchemaRegistrySerDe.resolveRegistryAuthConfig(params, _ => Some("  "))
+    assert(result(BasicAuthCredentialsSourceKey) == "USER_INFO")
+    assert(!result.contains(BasicAuthUserInfoKey))
+  }
+
   // ============== Schema Evolution Bug Tests ==============
 
   /**
@@ -317,6 +376,93 @@ class SchemaRegistrySerDeSpec extends AnyFlatSpec {
     assert(mutation.after(0) == "John")
     assert(mutation.after(1) == 30)
     assert(mutation.after(2) == null, "email should be null (default from schema 2)")
+  }
+
+  it should "decode mixed writer versions using a pinned reader schema version when forward compatible schemas are used" in {
+    val schema1Str =
+      """{ "type": "record", "name": "ForwardCompatibleEvent", "fields": [
+        |  { "name": "entityId", "type": "string" },
+        |  { "name": "userId", "type": "string" },
+        |  { "name": "ts", "type": "long" },
+        |  { "name": "eventCount", "type": "int" }
+        |]}""".stripMargin
+
+    val schema2Str =
+      """{ "type": "record", "name": "ForwardCompatibleEvent", "fields": [
+        |  { "name": "entityId", "type": "string" },
+        |  { "name": "userId", "type": "string" },
+        |  { "name": "ts", "type": "long" },
+        |  { "name": "eventCount", "type": "int" },
+        |  { "name": "newStringField", "type": "string" },
+        |  { "name": "newIntField", "type": "int" }
+        |]}""".stripMargin
+
+    val freshClient = new MockSchemaRegistryClient(Seq(avroSchemaProvider).asJava)
+    val subject = "forward-compatible-version-pin-test-value"
+
+    val schema1Id = freshClient.register(subject, new AvroSchema(schema1Str))
+    val schema2Id = freshClient.register(subject, new AvroSchema(schema2Str))
+    assert(schema1Id != schema2Id, "Schema IDs should differ")
+
+    val topicInfo = TopicInfo(
+      "forward-compatible-version-pin-test",
+      "kafka",
+      Map(
+        RegistryHostKey -> "localhost",
+        SchemaRegistryWireFormat -> "true",
+        ReaderSchemaVersionKey -> "1"
+      )
+    )
+    val serDe = new MockSchemaRegistrySerDe(topicInfo, freshClient)
+
+    assert(serDe.schema.fields.map(_.name).toSeq == Seq("entityId", "userId", "ts", "eventCount"))
+
+    val codec1 = new AvroCodec(schema1Str)
+    val record1 = new GenericData.Record(codec1.schema)
+    record1.put("entityId", "e1")
+    record1.put("userId", "u1")
+    record1.put("ts", 1234L)
+    record1.put("eventCount", 1)
+
+    val codec2 = new AvroCodec(schema2Str)
+    val record2 = new GenericData.Record(codec2.schema)
+    record2.put("entityId", "e2")
+    record2.put("userId", "u2")
+    record2.put("ts", 5678L)
+    record2.put("eventCount", 2)
+    record2.put("newStringField", "new-value")
+    record2.put("newIntField", 1000)
+
+    val mutation1 = serDe.fromBytes(buildWireFormatMessage(schema1Id, codec1.encodeBinary(record1)))
+    assert(mutation1.after.toSeq == Seq("e1", "u1", 1234L, 1))
+
+    val mutation2 = serDe.fromBytes(buildWireFormatMessage(schema2Id, codec2.encodeBinary(record2)))
+    assert(mutation2.after.toSeq == Seq("e2", "u2", 5678L, 2))
+  }
+
+  it should "fail when reader schema version is not registered" in {
+    val schemaStr =
+      """{ "type": "record", "name": "MissingReaderVersion", "fields": [
+        |  { "name": "id", "type": "string" }
+        |]}""".stripMargin
+
+    val freshClient = new MockSchemaRegistryClient(Seq(avroSchemaProvider).asJava)
+    freshClient.register("missing-reader-version-test-value", new AvroSchema(schemaStr))
+
+    val topicInfo = TopicInfo(
+      "missing-reader-version-test",
+      "kafka",
+      Map(
+        RegistryHostKey -> "localhost",
+        ReaderSchemaVersionKey -> "2"
+      )
+    )
+    val serDe = new MockSchemaRegistrySerDe(topicInfo, freshClient)
+
+    val thrown = intercept[IllegalArgumentException] {
+      serDe.schema
+    }
+    assert(thrown.getMessage.contains("Failed to retrieve schema details from the registry"))
   }
 
   // Schema evolution scenario 2: Flink started before schema upgrade
@@ -414,5 +560,112 @@ class SchemaRegistrySerDeSpec extends AnyFlatSpec {
     val mutation = serDe.fromBytes(wireMessage)
     assert(mutation.after(0) == "Bob")
     assert(mutation.after(1) == 35, "age should be 35 — Avro resolution matches fields by name, not position")
+  }
+
+  // ============== Debezium Tests ==============
+
+  private val debeziumEnvelopeSchemaStr =
+    """{
+      |  "type": "record", "name": "Envelope", "namespace": "debezium",
+      |  "fields": [
+      |    {"name": "op", "type": "string"},
+      |    {"name": "before", "type": ["null", {
+      |      "type": "record", "name": "Value",
+      |      "fields": [
+      |        {"name": "id",   "type": "int"},
+      |        {"name": "name", "type": ["null", "string"], "default": null}
+      |      ]
+      |    }], "default": null},
+      |    {"name": "after",  "type": ["null", "debezium.Value"], "default": null},
+      |    {"name": "source", "type": {
+      |      "type": "record", "name": "Source",
+      |      "fields": [{"name": "ts_ms", "type": ["null", "long"], "default": null}]
+      |    }},
+      |    {"name": "ts_ms", "type": ["null", "long"], "default": null}
+      |  ]
+      |}""".stripMargin
+
+  it should "use DebeziumAvroSerDe as delegate when debezium=true" in {
+    val freshClient = new MockSchemaRegistryClient(Seq(avroSchemaProvider).asJava)
+    freshClient.register("debezium-topic-value", new AvroSchema(debeziumEnvelopeSchemaStr))
+
+    val topicInfo = TopicInfo(
+      "debezium-topic",
+      "kafka",
+      Map(RegistryHostKey -> "localhost", DebeziumMutationMapper.DebeziumKey -> "true", SchemaRegistryWireFormat -> "false")
+    )
+    val serDe = new MockSchemaRegistrySerDe(topicInfo, freshClient)
+
+    // Schema should include mutation columns
+    val schema = serDe.schema
+    assert(schema.fields.length == 4, s"Expected 4 fields (id, name, mutation_ts, is_before), got ${schema.fields.length}")
+    assert(schema.fields(2).name == Constants.MutationTimeColumn)
+    assert(schema.fields(2).fieldType == LongType)
+    assert(schema.fields(3).name == Constants.ReversalColumn)
+    assert(schema.fields(3).fieldType == BooleanType)
+  }
+
+  it should "deserialize Debezium UPDATE envelope into Mutation with both before and after when debezium=true" in {
+    val ts = 1710631967915L
+    val freshClient = new MockSchemaRegistryClient(Seq(avroSchemaProvider).asJava)
+    freshClient.register("debezium-update-topic-value", new AvroSchema(debeziumEnvelopeSchemaStr))
+
+    val topicInfo = TopicInfo(
+      "debezium-update-topic",
+      "kafka",
+      Map(RegistryHostKey -> "localhost", DebeziumMutationMapper.DebeziumKey -> "true", SchemaRegistryWireFormat -> "false")
+    )
+    val serDe = new MockSchemaRegistrySerDe(topicInfo, freshClient)
+
+    val envelopeAvroSchema = AvroCodec.of(debeziumEnvelopeSchemaStr).schema
+    val valueSchema = envelopeAvroSchema.getField("before").schema().getTypes.get(1)
+    val sourceSchema = envelopeAvroSchema.getField("source").schema()
+
+    def makeValue(id: Int, name: String) = {
+      val r = new GenericData.Record(valueSchema)
+      r.put("id", id)
+      r.put("name", name)
+      r
+    }
+    val source = new GenericData.Record(sourceSchema)
+    source.put("ts_ms", ts: java.lang.Long)
+
+    val codec = new AvroCodec(debeziumEnvelopeSchemaStr)
+    val envelope = new GenericData.Record(envelopeAvroSchema)
+    envelope.put("op", "u")
+    envelope.put("before", makeValue(1, "Alice"))
+    envelope.put("after", makeValue(1, "Alicia"))
+    envelope.put("source", source)
+    envelope.put("ts_ms", null)
+
+    val mutation = serDe.fromBytes(codec.encodeBinary(envelope))
+
+    // UPDATE: both before and after should be populated
+    assert(mutation.before != null, "before should not be null for UPDATE")
+    assert(mutation.after != null, "after should not be null for UPDATE")
+    assert(mutation.before(1) == "Alice")
+    assert(mutation.after(1) == "Alicia")
+    assert(mutation.before(3) == (true: java.lang.Boolean), "before row should have is_before=true")
+    assert(mutation.after(3) == (false: java.lang.Boolean), "after row should have is_before=false")
+    assert(mutation.before(2) == (ts: java.lang.Long))
+    assert(mutation.after(2) == (ts: java.lang.Long))
+  }
+
+  it should "throw IllegalArgumentException when debezium=true with a Protobuf schema" in {
+    val proto3SchemaStr =
+      """syntax = "proto3";
+        |message Envelope { string op = 1; }""".stripMargin
+    val freshClient = new MockSchemaRegistryClient(Seq(protoSchemaProvider).asJava)
+    freshClient.register("debezium-proto-value", new ProtobufSchema(proto3SchemaStr))
+
+    val topicInfo = TopicInfo(
+      "debezium-proto",
+      "kafka",
+      Map(RegistryHostKey -> "localhost", DebeziumMutationMapper.DebeziumKey -> "true", SchemaRegistryWireFormat -> "false")
+    )
+    val serDe = new MockSchemaRegistrySerDe(topicInfo, freshClient)
+    assertThrows[IllegalArgumentException] {
+      serDe.schema
+    }
   }
 }

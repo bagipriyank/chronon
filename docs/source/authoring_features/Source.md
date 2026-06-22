@@ -87,6 +87,8 @@ In this case there would be:
 
 As you can see, a pre-requisite to using the streaming `EntitySource` is a change capture system. [Debezium](https://debezium.io/) is one suitable solution for this piece of upstream infrastructure.
 
+For a more detailed complete guide see [Entity Source](./EntitySource.md).
+
 ## Batch EntitySource
 
 Taken from the [users.py](https://github.com/zipline-ai/chronon/blob/main/api/python/test/sample/group_bys/quickstart/users.py) example GroupBy in the quickstart tutorial.
@@ -101,7 +103,7 @@ source = Source(
     ))
 ```
 
-This is similar to the above, however, it only contains the `snapshotTable`, and not the batch and streaming mutations sources.
+This is similar to the above, however, it only contains the `snapshotTable`, and not the batch and streaming mutations sources. See [Entity Source](./EntitySource.md) for the full reference on all EntitySource parameters.
 
 ## Time-Partitioned Sources
 

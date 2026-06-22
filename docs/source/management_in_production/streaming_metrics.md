@@ -75,6 +75,12 @@ Monitor the performance of various Flink operators in the pipeline.
 - **Tags**: `feature_group`, `team`, `production`, `environment`
 - **Use Case**: Identify performance bottlenecks
 
+**Metric: `spark_row_ser_time`**
+- **Type**: Histogram
+- **Description**: Time spent serializing a Spark row after expression evaluation
+- **Tags**: `feature_group`, `team`, `production`, `environment`
+- **Use Case**: Identify serialization bottlenecks in the expression evaluation stage
+
 **Metric: `row_aggregation_time`**
 - **Type**: Histogram
 - **Description**: Time spent aggregating individual rows within windows
@@ -143,6 +149,12 @@ To enable streaming metrics collection, set the following Flink configuration pa
 
 * "metrics.reporters" = "prom",
 * "metrics.reporter.prom.factory.class" = "org.apache.flink.metrics.prometheus.PrometheusReporterFactory",
+
+## Job Identity on Flink Metrics and Pods
+
+Flink natively exposes the job name as a `job_name` tag on all emitted metrics (throughput, checkpoint duration, backpressure, etc.). Since chronon sets the Flink job name to the GroupBy metadata name (via `env.execute(groupByName)`), dashboards can group by `job_name` to identify which GroupBy a metric belongs to.
+
+For infrastructure metrics (CPU, memory, restarts) collected by kubelet-level agents — which have no access to Flink's metric scope — `K8sFlinkSubmitter` stamps a `chronon/job_name` Kubernetes pod label on both JobManager and TaskManager pods. The label value is a Kubernetes-safe sanitized representation of the same GroupBy name: restricted to `[A-Za-z0-9_]`, ≤63 characters, with an 8-char hash suffix on truncation for distinguishability. The pod label and Flink's `job_name` metric tag are intended for correlation, not necessarily exact string equality.
 
 ## Monitoring & Alerting
 

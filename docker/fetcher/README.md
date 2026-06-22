@@ -23,7 +23,7 @@ There's some additional environment variables that the Docker container can be s
 | Environment Variable              | Description                                                                                                                                                                                                                                                                                                                   | Default Value           |
 |-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|
 | **AWS Configuration**
-| KV_TABLE_PREFIX                   | Prefix to prepend to DynamoDB table names when fetching features. Allows the service to fetch from prefixed DynamoDB tables (e.g., if set to "dev_", table "my_table" becomes "dev_my_table")                                                                                                                                | ``                      |
+| KV_TABLE_PREFIX                   | Prefix to prepend to DynamoDB table names when fetching features. Allows the service to fetch from prefixed DynamoDB tables (e.g., if set to "dev_", table "my_table" becomes "dev_my_table")                                                                                                                                 | ``                      |
 | **Google Cloud Configuration**
 | GCP_PROJECT_ID                    | GCloud Zipline BigTable project                                                                                                                                                                                                                                                                                               | ``                      |
 | GOOGLE_CLOUD_PROJECT              | GCloud Zipline BigTable project                                                                                                                                                                                                                                                                                               | ``                      |
@@ -39,11 +39,13 @@ There's some additional environment variables that the Docker container can be s
 | CHRONON_METRICS_EXPORTER_INTERVAL | If using the 'http' or 'grpc' metrics reader, configures the interval between metric exports using ISO-8601 duration format (e.g., PT30S for 30 seconds)                                                                                                                                                                      | `PT15S`                 |
 | CHRONON_PROMETHEUS_SERVER_PORT    | If using the 'prometheus' metrics reader, exposes a [Prometheus service endpoint](https://opentelemetry.io/docs/specs/otel/metrics/sdk_exporters/prometheus/) on the configured port to export Chronon library metrics                                                                                                        | `8905`                  |
 | VERTX_PROMETHEUS_SERVER_PORT      | If using the 'prometheus' metrics reader, exposes a [Prometheus service endpoint](https://opentelemetry.io/docs/specs/otel/metrics/sdk_exporters/prometheus/) on the configured port to export Vert.x webservice metrics                                                                                                      | `8906`                  |
+| OTEL_SERVICE_NAME                 | Overrides `service.name` in OTLP resource attributes set via OTEL_RESOURCE_ATTRIBUTES for both the Chronon library and Vert.x metric paths. Highest priority for service identity.                                                                                                                                            | `ai.chronon`            |
+| OTEL_RESOURCE_ATTRIBUTES          | Comma-separated `key=value` pairs appended to OTLP resource attributes (e.g., `deployment.environment=prod,team=ml`).                                                                                                                                                                                                         | ``                      |
 | **Monitoring**                    
 | FETCHER_OOC_TOPIC_INFO            | Topic string in the format of: `kafka://my-topic-name/key1=value1/key2=value2`. If configured, the service emits [online offline consistency feature logging](https://chronon.ai/test_deploy_serve/Online_Offline_Consistency.html) data to the given topic                                                                   | ``                      |
 | **JVM Configuration**             
-| JVM_OPTS                          | Additional JVM options to pass to the service | ``                      |
-| USE_ZGC                           | Use the [Z Garbage Collector](https://docs.oracle.com/en/java/javase/21/gctuning/z-garbage-collector.html) | `false`|
+| JVM_OPTS                          | Additional JVM options to pass to the service                                                                                                                                                                                                                                                                                 | ``                      |
+| USE_ZGC                           | Use the [Z Garbage Collector](https://docs.oracle.com/en/java/javase/21/gctuning/z-garbage-collector.html)                                                                                                                                                                                                                    | `false`|
 
 ## Exporting Metrics
 
@@ -65,7 +67,9 @@ The service exposes the following HTTP endpoints:
 |GET |`/ping` | Health check endpoint            |
 |GET |`/config` | Fetcher service configuration            |
 |GET |`/v1/joins` | List of Chronon joins marked online            |
-|GET|`/v1/join/:name/schema` | Returns a join schema payload (consists of join name, entity key schema as an Avro string, value schema as an Avro string, schema hash
+|GET|`/v1/join/:name/schema` | Returns a join schema payload |
+|GET|`/v1/groupby/:name/schema` | Returns an online GroupBy schema payload |
+|GET|`/v1/groupby/:name/status` | Returns online GroupBy upload status |
 |POST|`/v1/fetch/groupby/:name`| Retrieve features for a specific GroupBy
 |POST|`/v1/fetch/join/:name`| Retrieve features for a specific Join
 |POST|`/v2/fetch/join/:name`| Retrieve features for a specific Join with the features response as an Avro binary string (base64 encoded)

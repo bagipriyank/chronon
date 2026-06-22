@@ -94,13 +94,17 @@ object SnowflakeConnector {
     env.get("SNOWFLAKE_PRIVATE_KEY") match {
       case Some(key) => key
       case None =>
-        env.get("SNOWFLAKE_VAULT_URI") match {
+        env
+          .get("SNOWFLAKE_PRIVATE_KEY_VAULT_URI")
+          .filter(_.trim.nonEmpty)
+          .orElse(env.get("SNOWFLAKE_VAULT_URI").filter(_.trim.nonEmpty)) match {
           case Some(vaultUri) =>
             val (vaultUrl, secretName) = AzureKeyVaultHelper.parseSecretUri(vaultUri)
             AzureKeyVaultHelper.getSecret(vaultUrl, secretName)
           case None =>
             throw new IllegalStateException(
-              "Snowflake private key not found. Provide SNOWFLAKE_PRIVATE_KEY or SNOWFLAKE_VAULT_URI.")
+              "Snowflake private key not found. Provide SNOWFLAKE_PRIVATE_KEY, " +
+                "SNOWFLAKE_PRIVATE_KEY_VAULT_URI, or SNOWFLAKE_VAULT_URI.")
         }
     }
   }

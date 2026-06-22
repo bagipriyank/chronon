@@ -19,6 +19,9 @@ class LocalSchemaSerDe(topicInfo: TopicInfo, schemaDir: String) extends SerDe {
 
   @transient private lazy val logger = LoggerFactory.getLogger(getClass)
 
+  private val isDebezium: Boolean =
+    topicInfo.params.getOrElse(DebeziumMutationMapper.DebeziumKey, "false").toBoolean
+
   private lazy val delegate: SerDe = {
     val schemaName =
       topicInfo.params.getOrElse(SchemaNameKey, throw new IllegalArgumentException(s"$SchemaNameKey not set"))
@@ -34,13 +37,14 @@ class LocalSchemaSerDe(topicInfo: TopicInfo, schemaDir: String) extends SerDe {
       logger.info(s"Loading local Avro schema from $avscFile")
       val schemaStr = new String(Files.readAllBytes(avscFile), StandardCharsets.UTF_8)
       val avroSchema = AvroCodec.of(schemaStr).schema
-      return new AvroSerDe(avroSchema)
+      return if (isDebezium) new DebeziumAvroSerDe(avroSchema) else new AvroSerDe(avroSchema)
     }
 
     if (Files.exists(jsonFile)) {
       logger.info(s"Loading local JSON schema from $jsonFile")
       val schemaStr = new String(Files.readAllBytes(jsonFile), StandardCharsets.UTF_8)
-      return new JsonSchemaSerDe(schemaStr, schemaName)
+      return if (isDebezium) new DebeziumJsonSerDe(schemaStr, schemaName)
+      else new JsonSchemaSerDe(schemaStr, schemaName)
     }
 
     throw new IllegalArgumentException(s"No schema file found for '$schemaName' in $dir: tried $avscFile and $jsonFile")

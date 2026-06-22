@@ -2,7 +2,17 @@ package ai.chronon.flink.deser
 
 import ai.chronon.api.StructType
 import ai.chronon.online.TopicInfo
-import ai.chronon.online.serde.{AvroCodec, AvroSerDe, JsonSchemaSerDe, Mutation, ProtobufSerDe, SerDe}
+import ai.chronon.online.serde.{
+  AvroCodec,
+  AvroSerDe,
+  DebeziumAvroSerDe,
+  DebeziumJsonSerDe,
+  DebeziumMutationMapper,
+  JsonSchemaSerDe,
+  Mutation,
+  ProtobufSerDe,
+  SerDe
+}
 import io.apicurio.registry.rest.client.{RegistryClient, RegistryClientFactory}
 import io.apicurio.registry.rest.client.exception.ArtifactNotFoundException
 import io.apicurio.registry.types.ArtifactType
@@ -40,6 +50,9 @@ class ApicurioSchemaSerDe(topicInfo: TopicInfo) extends SerDe {
   private val artifactId: String = topicInfo.params.getOrElse(ArtifactIdKey, topicInfo.name)
 
   private val wireFormat: Option[String] = topicInfo.params.get(WireFormatKey).map(_.toLowerCase)
+
+  private val isDebezium: Boolean =
+    topicInfo.params.getOrElse(DebeziumMutationMapper.DebeziumKey, "false").toBoolean
 
   private val proto3DefaultAsNull: Boolean =
     topicInfo.params.getOrElse(Proto3DefaultAsNullKey, "false").toBoolean
@@ -87,13 +100,16 @@ class ApicurioSchemaSerDe(topicInfo: TopicInfo) extends SerDe {
     metadata.getType match {
       case ArtifactType.AVRO =>
         val avroSchema = AvroCodec.of(schemaContent).schema
-        new AvroSerDe(avroSchema)
+        if (isDebezium) new DebeziumAvroSerDe(avroSchema) else new AvroSerDe(avroSchema)
       case ArtifactType.PROTOBUF =>
+        if (isDebezium)
+          throw new IllegalArgumentException("debezium is not supported with Protobuf schemas. Use Avro / Json.")
         val protobufSchema = new ProtobufSchema(schemaContent)
         val descriptor = protobufSchema.toDescriptor()
         new ProtobufSerDe(descriptor, proto3DefaultAsNull)
       case ArtifactType.JSON =>
-        new JsonSchemaSerDe(schemaContent, artifactId)
+        if (isDebezium) new DebeziumJsonSerDe(schemaContent, artifactId)
+        else new JsonSchemaSerDe(schemaContent, artifactId)
       case other =>
         throw new IllegalArgumentException(
           s"Unsupported schema type: $other. Supported types are AVRO, PROTOBUF, and JSON.")
@@ -108,6 +124,11 @@ class ApicurioSchemaSerDe(topicInfo: TopicInfo) extends SerDe {
         val globalId = ByteBuffer.wrap(bytes, 1, 8).getLong
         val payload = bytes.drop(9)
         delegate match {
+          case debeziumAvroSerDe: DebeziumAvroSerDe =>
+            val schemaContent = scala.util
+              .Using(registryClient.getContentByGlobalId(globalId))(Source.fromInputStream(_)(Codec.UTF8).mkString)
+              .get
+            debeziumAvroSerDe.fromBytes(payload, schemaContent)
           case avroSerDe: AvroSerDe =>
             val schemaContent = scala.util
               .Using(registryClient.getContentByGlobalId(globalId))(Source.fromInputStream(_)(Codec.UTF8).mkString)
@@ -120,6 +141,11 @@ class ApicurioSchemaSerDe(topicInfo: TopicInfo) extends SerDe {
         val globalId = ByteBuffer.wrap(bytes, 1, 4).getInt.toLong
         val payload = bytes.drop(5)
         delegate match {
+          case debeziumAvroSerDe: DebeziumAvroSerDe =>
+            val schemaContent = scala.util
+              .Using(registryClient.getContentByGlobalId(globalId))(Source.fromInputStream(_)(Codec.UTF8).mkString)
+              .get
+            debeziumAvroSerDe.fromBytes(payload, schemaContent)
           case avroSerDe: AvroSerDe =>
             val schemaContent = scala.util
               .Using(registryClient.getContentByGlobalId(globalId))(Source.fromInputStream(_)(Codec.UTF8).mkString)

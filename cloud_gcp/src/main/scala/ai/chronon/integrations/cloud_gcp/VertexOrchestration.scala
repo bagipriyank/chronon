@@ -3,7 +3,7 @@ package ai.chronon.integrations.cloud_gcp
 import ai.chronon.api.Extensions.SourceOps
 import ai.chronon.api.commonConstants.{END_DS_KEYWORD, INPUT_TABLE_KEYWORD, START_DS_KEYWORD}
 import ai.chronon.api.{JobStatusType, PartitionSpec, ResourceConfig, ServingContainerConfig, TrainingSpec}
-import ai.chronon.online.metrics.FlexibleExecutionContext
+import ai.chronon.online.metrics.{FlexibleExecutionContext, Metrics}
 import ai.chronon.online.{DeployModelRequest, ModelJobStatus, TrainingRequest}
 import com.google.api.core.ApiFuture
 import com.google.cloud.aiplatform.v1._
@@ -43,7 +43,9 @@ class VertexOrchestration(project: String, location: String) extends Serializabl
     ModelServiceClient.create(settings)
   }
 
-  implicit lazy val ec: ExecutionContextExecutor = FlexibleExecutionContext.buildExecutionContext
+  implicit lazy val ec: ExecutionContextExecutor =
+    FlexibleExecutionContext.buildExecutionContext(
+      Metrics.Context(Metrics.Environment.Orchestrator).withSuffix("threadpool"))
 
   // Forms a training request using the Vertex AI SDK
   // Based on: https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.customJobs

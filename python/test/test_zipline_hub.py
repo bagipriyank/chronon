@@ -69,6 +69,22 @@ class TestZiplineHub:
         assert "X-Zipline-Version" in call_kwargs[1]["headers"]
 
     @patch("requests.post")
+    def test_call_workflow_start_api_with_concurrency(self, mock_post):
+        """Test workflow start API includes requested workflow concurrency."""
+        mock_response = Mock()
+        mock_response.json.return_value = {"workflowId": "456"}
+        mock_post.return_value = mock_response
+
+        hub = ZiplineHub("http://example.com")
+        result = hub.call_workflow_start_api(
+            "test_conf", "daily", "main", "user1", "hash123", concurrency=250
+        )
+
+        assert result == {"workflowId": "456"}
+        call_kwargs = mock_post.call_args
+        assert call_kwargs[1]["json"]["workflowConcurrency"] == 250
+
+    @patch("requests.post")
     def test_call_streaming_redeploy_api_success(self, mock_post):
         """Test streaming redeploy API call posts correct URL and body."""
         mock_response = Mock()

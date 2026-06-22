@@ -132,11 +132,30 @@ class HeterogeneousPartitionColumnsTest extends BaseJoinTest {
 
     leftDf.save(itemQueriesTable, partitionColumns = Seq(leftCustomPartitionCol))
 
+    val leftEndFormatSpec = tableUtils.partitionSpec.copy(column = leftCustomPartitionCol, format = leftCustomFormat)
+
+    // Pin start past the boundary partition. DataFrameGen.events derives its time window from
+    // CStream.TimeStream(minTs = currentTimeMillis() - window), so the first written partition
+    // spans only the fraction of a day from minTs's time-of-day to midnight and is materially
+    // sparser than the rest. tableUtils.partitions normalizes results to the default spec, so
+    // translate back into leftEndFormatSpec to keep startPartition in the same format as the
+    // query and endPartition.
+    val writtenPartitions =
+      tableUtils.partitions(itemQueriesTable, tablePartitionSpec = Some(leftEndFormatSpec)).sorted
+    val leftStartPartition = writtenPartitions
+      .drop(1)
+      .headOption
+      .map(tableUtils.partitionSpec.translate(_, leftEndFormatSpec))
+      .getOrElse(throw new IllegalStateException(
+        s"Expected at least 2 partitions in $itemQueriesTable to skip sparse boundary, " +
+          s"found: ${writtenPartitions.mkString(", ")}"))
+
     val joinConf = Builders.Join(
       left = Builders.Source.events(
         Builders
           .Query(
-            partitionColumn = leftCustomPartitionCol
+            partitionColumn = leftCustomPartitionCol,
+            startPartition = leftStartPartition
           )
           .setPartitionFormat(leftCustomFormat),
         table = itemQueriesTable
@@ -150,11 +169,20 @@ class HeterogeneousPartitionColumnsTest extends BaseJoinTest {
     // Use a dynamic end partition that's within the generated data range
     // Start is threeDaysAgo - 200 days, so use a date that's within the data range
     val endPartitionDate = tableUtils.partitionSpec.minus(threeDaysAgo, new Window(100, TimeUnit.DAYS))
-    val leftEndFormatSpec = tableUtils.partitionSpec.copy(column = leftCustomPartitionCol, format = leftCustomFormat)
     val endPartition = leftEndFormatSpec.at(tableUtils.partitionSpec.epochMillis(endPartitionDate))
 
     val join = new ai.chronon.spark.Join(joinConf = joinConf, endPartition = endPartition, tableUtils = tableUtils)
     val computed = join.computeJoin()
-    assert(computed.collect().nonEmpty)
+    val computedRows = computed.collect()
+    assert(computedRows.nonEmpty)
+
+    // Multi-day coverage is what this test exists to exercise - without an explicit assertion,
+    // a future regression in the engine's spec handling could collapse the compute range to
+    // a one-day result that still passes the non-empty check above.
+    val outputPartitions = computedRows.map(_.getAs[String]("ds")).filter(_ != null).toSet
+    assert(
+      outputPartitions.size > 1,
+      s"Expected computed output to span multiple partitions, got: ${outputPartitions.toList.sorted.mkString(", ")}"
+    )
   }
 }

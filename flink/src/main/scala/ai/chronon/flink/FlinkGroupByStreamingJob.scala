@@ -1,8 +1,10 @@
 package ai.chronon.flink
 
 import ai.chronon.aggregator.windowing.ResolutionUtils
+import ai.chronon.api.DataModel
 import ai.chronon.api.Extensions.{GroupByOps, SourceOps}
 import ai.chronon.api.DataType
+import scala.concurrent.duration.DurationInt
 import ai.chronon.flink.FlinkJob.watermarkStrategy
 import ai.chronon.flink.deser.ProjectedEvent
 import ai.chronon.flink.source.FlinkSource
@@ -23,6 +25,11 @@ import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.streaming.api.windowing.triggers.Trigger
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow
 import org.apache.flink.util.OutputTag
+
+object FlinkGroupByStreamingJob {
+  // Default allowed lateness for entity (CDC/mutation) sources — mutations can arrive significantly late.
+  val DefaultEntityAllowedLatenessSeconds: Long = 2.days.toSeconds
+}
 
 /** Flink job that processes a single streaming GroupBy and writes out the results (in the form of pre-aggregated tiles) to the KV store.
   *
@@ -221,5 +228,11 @@ class FlinkGroupByStreamingJob(eventSrc: FlinkSource[ProjectedEvent],
       .getOrElse(new AlwaysFireOnElementTrigger())
   }
 
-  private def getAllowedLatenessMs(): Long = FlinkUtils.getAllowedLatenessMs(props, topicInfo)
+  private[flink] def getAllowedLatenessMs(): Long = {
+    val defaultSeconds = groupByServingInfoParsed.groupBy.dataModel match {
+      case DataModel.ENTITIES => FlinkGroupByStreamingJob.DefaultEntityAllowedLatenessSeconds
+      case _                  => 0L
+    }
+    FlinkUtils.getAllowedLatenessMs(props, topicInfo, defaultSeconds)
+  }
 }

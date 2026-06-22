@@ -267,7 +267,7 @@ class BigTableKVStoreImpl(dataClient: BigtableDataClient,
   }
 
   override def list(request: ListRequest): Future[ListResponse] = {
-    logger.info(s"Performing list for ${request.dataset}")
+    logger.debug(s"Performing list for ${request.dataset}")
 
     val listLimit = request.props.get(ListLimit) match {
       case Some(value: Int)    => value
@@ -305,7 +305,7 @@ class BigTableKVStoreImpl(dataClient: BigtableDataClient,
         val startRowKey = buildRowKey(s"$listEntityType/".getBytes(Charset.forName("UTF-8")), request.dataset)
         query.range(ByteStringRange.unbounded().startOpen(ByteString.copyFrom(startRowKey)))
       case _ =>
-        logger.info("No start key or list entity type provided. Starting from the beginning")
+        logger.debug("No start key or list entity type provided. Starting from the beginning")
     }
 
     val startTs = System.currentTimeMillis()
@@ -544,8 +544,23 @@ class BigTableKVStoreImpl(dataClient: BigtableDataClient,
 
       val startTs = System.currentTimeMillis()
       // we append the timestamp to the jobID as BigQuery doesn't allow us to re-run the same job
-      val jobId =
-        JobId.of(adminClient.getProjectId, s"export_${sourceOfflineTable.sanitize}_to_bigtable_${partition}_$startTs")
+      // Pin the job to GCP_LOCATION so it lands in the same region as the BQ reservation
+      // assigned to the project. Without an explicit location, the BQ client won't specify any location
+      val jobId = {
+        GcpApiImpl
+          .getOptional(GcpApiImpl.GcpLocation, conf)
+          .fold({
+            logger.warn(s"GCP_LOCATION is not set, starting job without specifying location.")
+            JobId.of(adminClient.getProjectId,
+                     s"export_${sourceOfflineTable.sanitize}_to_bigtable_${partition}_$startTs")
+          })(bqLocation =>
+            JobId
+              .newBuilder()
+              .setProject(adminClient.getProjectId)
+              .setLocation(bqLocation)
+              .setJob(s"export_${sourceOfflineTable.sanitize}_to_bigtable_${partition}_$startTs")
+              .build())
+      }
       val job: Job = bigQueryClient.create(JobInfo.newBuilder(queryConfig).setJobId(jobId).build())
       logger.info(s"Export job started with Id: $jobId and link: ${job.getSelfLink}")
       val retryConfig =
@@ -581,17 +596,17 @@ class BigTableKVStoreImpl(dataClient: BigtableDataClient,
   override def init(props: Map[String, Any]): Unit = {
     super.init(props)
 
-    val warmupLengthMillis: Long = 5000L
+    val warmupLengthMillis: Long =
+      conf.get("WARMUP_TIMEOUT_MS").map(_.toLong).getOrElse(30000L)
     // Perform some dummy operations to warm up the client
     // This can help reduce latency for the first real operations.
     // Intentionally getting and deleting non-existent keys below to warm up.
 
     val testKey = "warmup_key"
-    logger.info(s"Warming up KVStore with key prefix $testKey")
+    logger.info(s"Warming up KVStore with key prefix $testKey (timeout=${warmupLengthMillis}ms)")
     try {
       val getFutures = this.multiGet(
-        // create 100 requests to simulate load
-        (1 to 100)
+        (1 to 1000)
           .map(i =>
             GetRequest(
               keyBytes = s"${testKey}_$i".getBytes,
@@ -600,7 +615,7 @@ class BigTableKVStoreImpl(dataClient: BigtableDataClient,
           .toSeq
       )
       val deleteFutures = this.multiDelete(
-        (1 to 100)
+        (1 to 1000)
           .map(i =>
             DeleteRequest(
               keyBytes = s"${testKey}_$i".getBytes,
@@ -608,19 +623,12 @@ class BigTableKVStoreImpl(dataClient: BigtableDataClient,
             ))
           .toSeq
       )
-      // Wait for the future to complete with a timeout
-      try {
-        Await.result(getFutures, warmupLengthMillis.milliseconds)
-        Await.result(deleteFutures, warmupLengthMillis.milliseconds)
-      } // swallow exception
-      catch {
-        case _: Exception =>
-      }
-
+      Await.result(getFutures, warmupLengthMillis.milliseconds)
+      Await.result(deleteFutures, warmupLengthMillis.milliseconds)
       logger.info("KVStore warm-up completed successfully")
     } catch {
       case e: Exception =>
-        logger.warn("Warm-up operations failed", e)
+        logger.warn(s"KVStore warm-up failed after ${warmupLengthMillis}ms", e)
     }
   }
 }
