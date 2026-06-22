@@ -31,7 +31,8 @@ class StagingQuery(stagingQueryConf: api.StagingQuery, endPartition: String, tab
                           enableAutoExpand: Option[Boolean] = Some(true),
                           overrideStartPartition: Option[String] = None,
                           skipFirstHole: Boolean = true,
-                          forceOverwrite: Boolean = false): Unit = {
+                          forceOverwrite: Boolean = false,
+                          outputLocation: Option[String] = None): Unit = {
     logger.info("Running setups for StagingQuery")
     Option(stagingQueryConf.setups).foreach(_.toScala.foreach(tableUtils.sql))
     val overrideStart = overrideStartPartition.getOrElse(stagingQueryConf.startPartition)
@@ -62,7 +63,7 @@ class StagingQuery(stagingQueryConf: api.StagingQuery, endPartition: String, tab
         stepRanges.zipWithIndex.foreach { case (range, index) =>
           val progress = s"| [${index + 1}/${stepRanges.size}]"
           logger.info(s"Computing staging query for range: $range  $progress")
-          compute(range, Seq.empty[String], enableAutoExpand)
+          compute(range, Seq.empty[String], enableAutoExpand, outputLocation)
         }
         logger.info(s"Finished writing Staging Query data to $outputTable")
       } catch {
@@ -81,13 +82,16 @@ class StagingQuery(stagingQueryConf: api.StagingQuery, endPartition: String, tab
     }
   }
 
-  def compute(range: PartitionRange, setups: Seq[String], enableAutoExpand: Option[Boolean]): Unit = {
+  def compute(range: PartitionRange,
+              setups: Seq[String],
+              enableAutoExpand: Option[Boolean],
+              outputLocation: Option[String] = None): Unit = {
     Option(setups).foreach(_.foreach(tableUtils.sql))
     val renderedQuery =
       StagingQuery.substitute(tableUtils, stagingQueryConf.query, range.start, range.end, endPartition)
     logger.info(s"Rendered Staging Query to run is:\n$renderedQuery")
     val df = tableUtils.sql(renderedQuery)
-    df.save(outputTable, tableProps, partitionCols, autoExpand = enableAutoExpand.get)
+    df.save(outputTable, tableProps, partitionCols, autoExpand = enableAutoExpand.get, outputLocation = outputLocation)
     logger.info(s"Wrote to table $outputTable, into partitions: $range")
     logger.info(s"Finished writing Staging Query data to $outputTable")
   }

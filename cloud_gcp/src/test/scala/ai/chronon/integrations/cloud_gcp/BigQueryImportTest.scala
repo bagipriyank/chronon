@@ -91,7 +91,10 @@ class BigQueryImportTest extends SparkTestBase with MockitoSugar {
     new BigQueryImport(stagingQueryConf, endPartition, tableUtils) {
       override private[cloud_gcp] lazy val bigQueryClient: BigQuery = mockClient
 
-      override def compute(range: PartitionRange, setups: Seq[String], enableAutoExpand: scala.Option[Boolean]): Unit = {
+      override def compute(range: PartitionRange,
+                           setups: Seq[String],
+                           enableAutoExpand: scala.Option[Boolean],
+                           outputLocation: scala.Option[String]): Unit = {
         // Step 1: Simulate BigQuery export by writing dummy data to the expected location
         val exportPath = exportUri(range.start, range.end).stripSuffix(s"/*.${formatStr}")
         import spark.implicits._
@@ -101,7 +104,7 @@ class BigQueryImportTest extends SparkTestBase with MockitoSugar {
         dummyData.write.mode(org.apache.spark.sql.SaveMode.Overwrite).parquet(exportPath)
 
         // Step 2: Call parent compute to read from temp and write to Iceberg
-        super.compute(range, setups, enableAutoExpand)
+        super.compute(range, setups, enableAutoExpand, outputLocation)
       }
     }
   }

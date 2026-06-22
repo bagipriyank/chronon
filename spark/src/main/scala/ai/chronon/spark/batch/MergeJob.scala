@@ -48,8 +48,11 @@ joinPartsToTables is a map of JoinPart to the table name of the output of that j
 due to bootstrap can be omitted from this map.
  */
 
-class MergeJob(node: JoinMergeNode, metaData: MetaData, range: DateRange, joinParts: Seq[JoinPart])(implicit
-    tableUtils: TableUtils) {
+class MergeJob(node: JoinMergeNode,
+               metaData: MetaData,
+               range: DateRange,
+               joinParts: Seq[JoinPart],
+               outputLocation: Option[String] = None)(implicit tableUtils: TableUtils) {
 
   implicit val partitionSpec: PartitionSpec = tableUtils.partitionSpec
 
@@ -134,7 +137,7 @@ class MergeJob(node: JoinMergeNode, metaData: MetaData, range: DateRange, joinPa
 
       val tableProps = createTableProperties
 
-      joinedDfTry.get.save(outputTable, tableProps, autoExpand = true)
+      joinedDfTry.get.save(outputTable, tableProps, autoExpand = true, outputLocation = outputLocation)
     }
   }
 

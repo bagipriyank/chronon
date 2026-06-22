@@ -20,7 +20,10 @@ import ai.chronon.spark.catalog.TableUtils
   * Note for orchestrator: This needs to run iff there are bootstraps or external parts to the join (applies additional
   * columns that may be used in derivations). Otherwise, the left source table can be used directly in final join.
   */
-class JoinBootstrapJob(node: JoinBootstrapNode, metaData: MetaData, range: DateRange)(implicit tableUtils: TableUtils) {
+class JoinBootstrapJob(node: JoinBootstrapNode,
+                       metaData: MetaData,
+                       range: DateRange,
+                       outputLocation: Option[String] = None)(implicit tableUtils: TableUtils) {
   private implicit val partitionSpec: PartitionSpec = tableUtils.partitionSpec
   @transient lazy val logger: Logger = LoggerFactory.getLogger(getClass)
 
@@ -40,12 +43,13 @@ class JoinBootstrapJob(node: JoinBootstrapNode, metaData: MetaData, range: DateR
 
     val bootstrapInfo = BootstrapInfo.from(join, dateRange, tableUtils, Option(leftDf.schema))
 
-    computeBootstrapTable(leftDf = leftDf, bootstrapInfo = bootstrapInfo)
+    computeBootstrapTable(leftDf = leftDf, bootstrapInfo = bootstrapInfo, outputLocation = outputLocation)
   }
 
   def computeBootstrapTable(leftDf: DataFrame,
                             bootstrapInfo: BootstrapInfo,
-                            tableProps: Map[String, String] = null): DataFrame = {
+                            tableProps: Map[String, String] = null,
+                            outputLocation: Option[String] = None): DataFrame = {
 
     val bootstrapTable: String = outputTable
 
@@ -126,7 +130,7 @@ class JoinBootstrapJob(node: JoinBootstrapNode, metaData: MetaData, range: DateR
     println(s"EnrichedDF schema: ${enrichedDf.schema}")
 
     // set autoExpand = true since log table could be a bootstrap part
-    enrichedDf.save(bootstrapTable, tableProps, autoExpand = true)
+    enrichedDf.save(bootstrapTable, tableProps, autoExpand = true, outputLocation = outputLocation)
 
     val elapsedMins = (System.currentTimeMillis() - startMillis) / (60 * 1000)
     logger.info(s"Finished computing bootstrap table $bootstrapTable in $elapsedMins minutes")
