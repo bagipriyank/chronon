@@ -17,7 +17,7 @@ import ai.chronon.api.{
 }
 import ai.chronon.planner.JoinMergeNode
 import ai.chronon.spark.Extensions._
-import ai.chronon.spark.JoinUtils.{coalescedJoin, leftDf}
+import ai.chronon.spark.JoinUtils.{coalescedJoin, leftDf, withFinalJoinWriteOptimizations}
 import ai.chronon.spark.JoinUtils
 import ai.chronon.spark.catalog.TableUtils
 import com.google.gson.Gson
@@ -137,7 +137,9 @@ class MergeJob(node: JoinMergeNode,
 
       val tableProps = createTableProperties
 
-      joinedDfTry.get.save(outputTable, tableProps, autoExpand = true, outputLocation = outputLocation)
+      withFinalJoinWriteOptimizations(tableUtils) {
+        joinedDfTry.get.save(outputTable, tableProps, autoExpand = true, outputLocation = outputLocation)
+      }
     }
   }
 
